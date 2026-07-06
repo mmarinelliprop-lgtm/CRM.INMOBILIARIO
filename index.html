@@ -14,6 +14,11 @@
   * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   body { margin:0; background:var(--bg); color:var(--text); font-family:'Manrope',sans-serif; padding-bottom:74px; }
   header { padding:16px 18px 8px; display:flex; justify-content:space-between; align-items:center; }
+  .who { display:flex; align-items:center; gap:10px; }
+  .avatar-bot { width:38px; height:38px; border-radius:50%; background:linear-gradient(135deg, var(--azul), var(--magenta)); display:flex; align-items:center; justify-content:center; font-size:16px; flex-shrink:0; }
+  .who-text .hi { font-size:11px; color:var(--muted); }
+  .who-text .name { font-size:14.5px; font-weight:800; }
+  .motivacional { font-size:10.5px; color:var(--naranja); font-weight:700; margin-top:2px; max-width:200px; line-height:1.3; }
   .titulo { font-size:15px; font-weight:800; }
   .header-btns { display:flex; gap:6px; }
   .header-btn { font-size:10px; font-weight:700; background:var(--card); border:1px solid var(--line); color:var(--text); border-radius:20px; padding:6px 9px; cursor:pointer; white-space:nowrap; }
@@ -116,7 +121,14 @@
 <body>
 
 <header>
-  <div class="titulo" id="header-titulo">Agenda</div>
+  <div class="who">
+    <div class="avatar-bot">🤖</div>
+    <div class="who-text">
+      <div class="hi">Hola de nuevo</div>
+      <div class="name">Martu</div>
+      <div class="motivacional" id="frase-motivacional"></div>
+    </div>
+  </div>
   <div class="header-btns" id="header-btns"></div>
 </header>
 
@@ -183,20 +195,33 @@
 // ================= CONEXIÓN CON LA API (Apps Script) =================
 // Pegá acá la URL de tu Web App de Apps Script (Implementar → Nueva implementación → Aplicación web).
 // Termina en /exec
-const APP_URL = 'https://script.google.com/macros/s/AKfycbz5fPCDPLtNzspIGPawPom0nkoboxGaPE0S2hQUq_CzvP8Q8w-YwfiPdO2qPGL6czks/exec';
+const APP_URL = 'https://script.google.com/macros/s/AKfycbyna3N9W9p23qKPBF3A_sp6q9VlkkYWcb7qrT4pAbYkZyXuN9M_jE1vYYRjoeFriX4/exec';
 
-async function apiCall(action, params) {
-  const url = new URL(APP_URL);
-  url.searchParams.set('action', action);
-  Object.keys(params || {}).forEach(function(k) {
-    const v = params[k];
-    if (v === null || v === undefined || v === '') return; // se omite: el backend usa su valor por defecto
-    url.searchParams.set(k, typeof v === 'object' ? JSON.stringify(v) : v);
+let _jsonpContador = 0;
+function apiCall(action, params) {
+  return new Promise(function(resolve, reject) {
+    const cbNombre = '_crmCallback' + (_jsonpContador++);
+    const url = new URL(APP_URL);
+    url.searchParams.set('action', action);
+    Object.keys(params || {}).forEach(function(k) {
+      const v = params[k];
+      if (v === null || v === undefined || v === '') return;
+      url.searchParams.set(k, typeof v === 'object' ? JSON.stringify(v) : v);
+    });
+    url.searchParams.set('callback', cbNombre);
+
+    const script = document.createElement('script');
+    const limpiar = function() { delete window[cbNombre]; script.remove(); };
+
+    window[cbNombre] = function(data) {
+      limpiar();
+      if (data && data.error) reject(new Error(data.error));
+      else resolve(data);
+    };
+    script.onerror = function() { limpiar(); reject(new Error('No se pudo conectar con la API.')); };
+    script.src = url.toString();
+    document.body.appendChild(script);
   });
-  const res = await fetch(url.toString());
-  const data = await res.json();
-  if (data && data.error) throw new Error(data.error);
-  return data;
 }
 
 // ================= NAV =================
@@ -207,7 +232,6 @@ function mostrar(v) {
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
   document.getElementById('view-' + v).classList.add('active');
   document.querySelector('.nav-item[data-view="' + v + '"]').classList.add('active');
-  document.getElementById('header-titulo').innerText = v.charAt(0).toUpperCase() + v.slice(1);
   pintarHeaderBtns(v);
   if (v === 'agenda') { if (cacheVistas.agenda) renderizarDia(cacheVistas.agenda); pintarVistaActual(); }
   if (v === 'clientes') { if (cacheVistas.activos) renderizarActivos(cacheVistas.activos); cargarActivos(''); }
@@ -665,8 +689,28 @@ function cargarMetas() {
   apiCall('getMetas').then(function(m) { cacheVistas.metas = m; renderizarMetas(m); }).catch(mostrarError);
 }
 
+// ================= SALUDO Y FRASE MOTIVACIONAL =================
+function pintarFraseMotivacional() {
+  apiCall('getMetas').then(function(m) {
+    cacheVistas.metas = m;
+    const hoy = new Date();
+    const diasMes = new Date(hoy.getFullYear(), hoy.getMonth() + 1, 0).getDate();
+    const progresoEsperado = hoy.getDate() / diasMes;
+    const progresoReal = ((m.captacionesEsteMes / m.metaCaptaciones) + (m.cierresEsteMes / m.metaCierres)) / 2;
+    const diff = progresoReal - progresoEsperado;
+    let frase;
+    if (diff < -0.2) frase = '⚠️ Vas atrasada con la meta del mes — hoy es día de moverte en serio.';
+    else if (diff < -0.08) frase = 'Un poco atrasada con la meta. Metele con todo hoy.';
+    else if (diff < 0.08) frase = 'Vas en ritmo con la meta del mes. Seguí así 💪';
+    else if (diff < 0.2) frase = 'Vas arriba de la meta — buen ritmo este mes.';
+    else frase = '🔥 Estás volando este mes, vas a superar la meta.';
+    document.getElementById('frase-motivacional').innerText = frase;
+  }).catch(function() { document.getElementById('frase-motivacional').innerText = ''; });
+}
+
 // ================= INIT =================
 pintarHeaderBtns('agenda');
+pintarFraseMotivacional();
 pintarDia();
 pintarTagsFiltro();
 </script>
