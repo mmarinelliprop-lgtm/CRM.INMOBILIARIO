@@ -41,8 +41,10 @@
   .cal-hour-lbl { width:42px; font-size:10px; color:var(--muted); padding-top:4px; flex-shrink:0; }
   .cal-hour-line { flex:1; }
   .cal-events-layer { position:absolute; top:0; left:46px; right:0; bottom:0; }
-  .cal-event { position:absolute; left:2px; right:2px; border-radius:8px; padding:5px 8px; font-size:11px; font-weight:700; overflow:hidden; cursor:pointer; }
+  .cal-event { position:absolute; left:2px; right:2px; border-radius:6px; padding:4px 8px; font-size:11px; font-weight:700; overflow:hidden; cursor:pointer; box-shadow:0 0 0 2px var(--bg); line-height:1.25; }
   .cal-event .sub { font-size:9px; font-weight:500; opacity:.85; margin-top:1px; }
+  .cal-event.compacto { padding:2px 8px; font-size:10px; white-space:nowrap; text-overflow:ellipsis; }
+  .cal-event.compacto .sub { display:none; }
   .ev-lila{background:var(--lila);color:#1c0f33} .ev-magenta{background:var(--magenta);color:#2c0518}
   .ev-azul{background:var(--azul);color:#041a2c} .ev-verde{background:var(--verde);color:#06281c} .ev-naranja{background:var(--naranja);color:#2c1600}
   .completada { opacity:.4; text-decoration:line-through; }
@@ -195,7 +197,7 @@
 // ================= CONEXIÓN CON LA API (Apps Script) =================
 // Pegá acá la URL de tu Web App de Apps Script (Implementar → Nueva implementación → Aplicación web).
 // Termina en /exec
-const APP_URL = 'https://script.google.com/macros/s/AKfycbzN8ECu8yj4bAYYIbbWsbtD4pjFDAH_Dr39zjGfeTHWdhnOPJn4uhyIDRutCWYyFkYv5g/exec';
+const APP_URL = 'https://script.google.com/macros/s/AKfycbyTrSMu-hy1MmxeUGylttGhiSq-ZdZAbzEGFUGge657978W3f16V7IYP5Waj4o2KAzssw/exec';
 
 let _jsonpContador = 0;
 function apiCall(action, params) {
@@ -279,11 +281,30 @@ function renderizarDia(eventos) {
   let filas = '';
   HORAS.forEach(h => filas += `<div class="cal-hour-row"><div class="cal-hour-lbl">${String(h).padStart(2,'0')}:00</div><div class="cal-hour-line"></div></div>`);
   const alturaHora = 54;
-  const html = eventos.map(ev => {
+
+  const conRango = eventos.map(ev => {
     const inicio = new Date(ev.inicioISO), fin = new Date(ev.finISO);
-    const inicioH = inicio.getHours() + inicio.getMinutes() / 60, finH = fin.getHours() + fin.getMinutes() / 60;
+    return Object.assign({}, ev, { _inicio: inicio, _fin: fin });
+  }).sort((a, b) => a._inicio - b._inicio);
+
+  // Agrupa eventos que se solapan en el tiempo y les asigna columna (col) y total de columnas (cols) del grupo.
+  const grupos = [];
+  conRango.forEach(ev => {
+    let grupo = grupos.find(g => g.some(e => ev._inicio < e._fin && ev._fin > e._inicio));
+    if (!grupo) { grupo = []; grupos.push(grupo); }
+    grupo.push(ev);
+  });
+  grupos.forEach(grupo => {
+    grupo.forEach((ev, i) => { ev._col = i; ev._cols = grupo.length; });
+  });
+
+  const html = conRango.map(ev => {
+    const inicioH = ev._inicio.getHours() + ev._inicio.getMinutes() / 60, finH = ev._fin.getHours() + ev._fin.getMinutes() / 60;
     const top = (inicioH - 8) * alturaHora, height = Math.max((finH - inicioH) * alturaHora - 3, 20);
-    return `<div class="cal-event ev-${ev.clase} ${ev.completada ? 'completada' : ''}" style="top:${top}px;height:${height}px" onclick="marcarHecho('${ev.id}')">${ev.completada ? '✓ ' : ''}${ev.titulo}<div class="sub">${ev.cliente}</div></div>`;
+    const anchoPct = 100 / ev._cols;
+    const leftPct = anchoPct * ev._col;
+    const compacto = height < 34 ? 'compacto' : '';
+    return `<div class="cal-event ev-${ev.clase} ${ev.completada ? 'completada' : ''} ${compacto}" style="top:${top}px;height:${height}px;left:calc(${leftPct}% + 2px);width:calc(${anchoPct}% - 4px);right:auto" onclick="marcarHecho('${ev.id}')">${ev.completada ? '✓ ' : ''}${ev.titulo}<div class="sub">${ev.cliente}</div></div>`;
   }).join('');
   document.getElementById('cal-grid').innerHTML = filas + `<div class="cal-events-layer">${html}</div>`;
 }
@@ -384,11 +405,38 @@ function manejarResultado(r) {
 
 function abrirConfirmarSimple(titulo) {
   document.getElementById('modal-box').innerHTML = `
-    <div class="modal-title">¿Marcar como hecha?</div>
-    <div class="modal-sub">${titulo}</div>
-    <button class="opcion-btn" onclick="confirmarSimpleSi()">Sí, marcarla como hecha<span class="flecha">›</span></button>
+    <div class="modal-title">${titulo}</div>
+    <div class="modal-sub">Esta tarea no está vinculada a ningún cliente. ¿Qué querés hacer?</div>
+    <button class="opcion-btn" onclick="mostrarFormVincular('${titulo.replace(/'/g,"\\'")}')">Cargar cliente y datos<span class="flecha">›</span></button>
+    <button class="opcion-btn" onclick="confirmarSimpleSi()">Solo marcarla como hecha (sin vincular)<span class="flecha">›</span></button>
     <div class="modal-cancelar" onclick="cerrarModal()">Cancelar</div>`;
   document.getElementById('modal-overlay').classList.add('active');
+}
+function mostrarFormVincular(tituloSugerido) {
+  document.getElementById('modal-box').innerHTML = `
+    <div class="modal-title">Cargar cliente</div>
+    <label class="q">Nombre</label><input class="q" id="vinc-nombre" placeholder="Ej: ${tituloSugerido}">
+    <label class="q">Teléfono</label><input class="q" id="vinc-telefono" placeholder="Ej: 3471528328">
+    <label class="q">¿En qué planilla va?</label>
+    <select class="q" id="vinc-sheet">
+      <option value="CONSULTAS_REDES">Consultas Redes (comprador/búsqueda)</option>
+      <option value="CAPTACIONES">Captaciones (propietario/venta)</option>
+    </select>
+    <label class="q">Etapa actual</label>
+    <select class="q" id="vinc-etapa">
+      ${ORDEN_ETAPAS.map(e => `<option value="${e}">${e}</option>`).join('')}
+    </select>
+    <button class="btn-continuar" onclick="guardarVincular()">Guardar y continuar</button>
+    <div class="modal-cancelar" onclick="cerrarModal()">Cancelar</div>`;
+}
+function guardarVincular() {
+  const nombre = document.getElementById('vinc-nombre').value.trim();
+  const telefono = document.getElementById('vinc-telefono').value.trim();
+  const sheetDestino = document.getElementById('vinc-sheet').value;
+  const etapa = document.getElementById('vinc-etapa').value;
+  if (!nombre) { alert('Falta el nombre.'); return; }
+  apiCall('vincularEventoYCompletar', { eventId: eventoActivoId, sheetDestino, nombre, telefono, etapa })
+    .then(manejarResultado).catch(mostrarError);
 }
 function confirmarSimpleSi() {
   cerrarModal();
@@ -568,10 +616,12 @@ function cambiarBloqueClientes(b, evt) {
 function cargarActivos(filtro) {
   apiCall('getClientesActivos', { filtro: filtro || '' }).then(function(clientes) { cacheVistas.activos = clientes; renderizarActivos(clientes); }).catch(mostrarError);
 }
+const ORDEN_ETAPAS = ['Contacto nuevo','Prelisting','Presentación de ACM','Publicación','Esperando info','Búsqueda permuta','Búsqueda activa','Muestra','Reserva','Cierre'];
 function renderizarActivos(clientes) {
   const grupos = {};
   clientes.forEach(c => { grupos[c.etapa] = grupos[c.etapa] || []; grupos[c.etapa].push(c); });
-  document.getElementById('grupos-activos').innerHTML = Object.keys(grupos).map(etapa => {
+  const etapasOrdenadas = ORDEN_ETAPAS.filter(e => grupos[e]).concat(Object.keys(grupos).filter(e => !ORDEN_ETAPAS.includes(e)));
+  document.getElementById('grupos-activos').innerHTML = etapasOrdenadas.map(etapa => {
     const items = grupos[etapa];
     const filas = items.map(c => `
       <div class="cliente-row" onclick="abrirPerfil('${c.sheet}', ${c.fila})">
