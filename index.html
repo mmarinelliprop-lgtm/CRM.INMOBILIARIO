@@ -55,7 +55,7 @@
   .mes-dots { display:flex; gap:2px; margin-top:4px; flex-wrap:wrap; justify-content:center; }
   .mes-dot { width:5px; height:5px; border-radius:50%; }
   .cal-grid { position:relative; border-top:1px solid var(--line); }
-  .cal-hour-row { height:54px; display:flex; border-bottom:1px solid var(--line); }
+  .cal-hour-row { height:80px; display:flex; border-bottom:1px solid var(--line); }
   .cal-hour-lbl { width:42px; font-size:10px; color:var(--muted); padding-top:4px; flex-shrink:0; }
   .cal-hour-line { flex:1; }
   .cal-events-layer { position:absolute; top:0; left:46px; right:0; bottom:0; }
@@ -107,7 +107,7 @@
   .tags-filtro { display:flex; gap:7px; overflow-x:auto; margin-bottom:12px; }
   .tag-filtro { font-size:11px; padding:7px 12px; border-radius:20px; background:var(--card); color:var(--muted); white-space:nowrap; cursor:pointer; border:1px solid var(--line); }
   .tag-filtro.active { background:var(--verde); color:#062b23; font-weight:700; }
-  .potencial-card { background:var(--card); border-radius:16px; padding:13px 14px; margin-bottom:9px; }
+  .potencial-card { background:var(--card); border-radius:16px; padding:13px 14px; margin-bottom:9px; cursor:pointer; }
   .ptag { font-size:9.5px; font-weight:800; padding:4px 9px; border-radius:8px; background:var(--card-2); color:var(--muted); margin-right:5px; }
   .btn-chico { font-size:10.5px; font-weight:800; padding:7px 11px; border-radius:10px; border:none; cursor:pointer; margin-right:6px; }
 
@@ -217,7 +217,10 @@
 // ================= CONEXIÓN CON LA API (Apps Script) =================
 // Pegá acá la URL de tu Web App de Apps Script (Implementar → Nueva implementación → Aplicación web).
 // Termina en /exec
-const APP_URL = 'https://script.google.com/macros/s/AKfycbz44Qe_D5DzuGuIgp-rnzWqi9KiRfXhnWAHIoxt8ZE6F9p2JomTug1T-WqaTxuwEMWYOQ/exec';
+const APP_URL = 'https://script.google.com/macros/s/AKfycbw8l-86iAHnohyHXgB1TW2soK_oy77fUYedQWN129GkLTYXymt0NgXtxj_paXo-_-aShg/exec';
+
+let _accionEnCurso = false;
+function _bloqueadoAhora() { if (_accionEnCurso) return true; _accionEnCurso = true; setTimeout(() => { _accionEnCurso = false; }, 4000); return false; }
 
 let _jsonpContador = 0;
 function apiCall(action, params) {
@@ -233,14 +236,28 @@ function apiCall(action, params) {
     url.searchParams.set('callback', cbNombre);
 
     const script = document.createElement('script');
-    const limpiar = function() { delete window[cbNombre]; script.remove(); };
+    let resuelto = false;
+    const limpiar = function() { delete window[cbNombre]; script.remove(); clearTimeout(timeoutId); };
+    const timeoutId = setTimeout(function() {
+      if (resuelto) return;
+      resuelto = true;
+      limpiar();
+      reject(new Error('La API no respondió en 20 segundos (acción: ' + action + '). Puede ser que Apps Script esté tardando mucho o que haya un error — revisá el log de Ejecuciones en el editor de Apps Script.'));
+    }, 20000);
 
     window[cbNombre] = function(data) {
+      if (resuelto) return;
+      resuelto = true;
       limpiar();
       if (data && data.error) reject(new Error(data.error));
       else resolve(data);
     };
-    script.onerror = function() { limpiar(); reject(new Error('No se pudo conectar con la API.')); };
+    script.onerror = function() {
+      if (resuelto) return;
+      resuelto = true;
+      limpiar();
+      reject(new Error('No se pudo conectar con la API.'));
+    };
     script.src = url.toString();
     document.body.appendChild(script);
   });
@@ -365,7 +382,8 @@ function pintarDia() {
 function renderizarDia(eventos) {
   let filas = '';
   HORAS.forEach(h => filas += `<div class="cal-hour-row"><div class="cal-hour-lbl">${String(h).padStart(2,'0')}:00</div><div class="cal-hour-line"></div></div>`);
-  const alturaHora = 54;
+  const alturaHora = 80;
+  const SEPARACION = 4;
 
   const conRango = eventos.map(ev => {
     const inicio = new Date(ev.inicioISO), fin = new Date(ev.finISO);
@@ -383,18 +401,39 @@ function renderizarDia(eventos) {
     grupo.forEach((ev, i) => { ev._col = i; ev._cols = grupo.length; });
   });
 
-  const html = conRango.map(ev => {
+  // Calcula top/height iniciales.
+  conRango.forEach(ev => {
     const inicioH = ev._inicio.getHours() + ev._inicio.getMinutes() / 60, finH = ev._fin.getHours() + ev._fin.getMinutes() / 60;
-    const top = (inicioH - 8) * alturaHora, height = Math.max((finH - inicioH) * alturaHora - 3, 20);
+    ev._top = (inicioH - 8) * alturaHora;
+    ev._height = Math.max((finH - inicioH) * alturaHora - SEPARACION, 24);
+  });
+
+  // Garantiza separación real: dentro de cada columna, ningún bloque puede pisar al siguiente.
+  const porColumna = {};
+  conRango.forEach(ev => {
+    const key = ev._col + '|' + ev._cols;
+    porColumna[key] = porColumna[key] || [];
+    porColumna[key].push(ev);
+  });
+  Object.values(porColumna).forEach(lista => {
+    lista.sort((a, b) => a._top - b._top);
+    for (let i = 0; i < lista.length - 1; i++) {
+      const actual = lista[i], siguiente = lista[i + 1];
+      const maxAltura = siguiente._top - actual._top - SEPARACION;
+      if (actual._height > maxAltura) actual._height = Math.max(maxAltura, 18);
+    }
+  });
+
+  const html = conRango.map(ev => {
     const anchoPct = 100 / ev._cols;
     const leftPct = anchoPct * ev._col;
-    const compacto = height < 34 ? 'compacto' : '';
+    const compacto = ev._height < 34 ? 'compacto' : '';
     const horaTxt = ev.hora;
     const subTxt = [ev.cliente, ev.ubicacion].filter(Boolean).join(' · ');
     const contenido = compacto
       ? `${ev.completada ? '✓ ' : ''}${horaTxt} · ${ev.titulo}${subTxt ? ' · ' + subTxt : ''}`
       : `${ev.completada ? '✓ ' : ''}${ev.titulo}<div class="sub">${horaTxt}${subTxt ? ' · ' + subTxt : ''}</div>`;
-    return `<div class="cal-event ev-${ev.clase} ${ev.completada ? 'completada' : ''} ${compacto}" style="top:${top}px;height:${height}px;left:calc(${leftPct}% + 2px);width:calc(${anchoPct}% - 4px);right:auto" onclick="marcarHecho('${ev.id}')">${contenido}</div>`;
+    return `<div class="cal-event ev-${ev.clase} ${ev.completada ? 'completada' : ''} ${compacto}" style="top:${ev._top}px;height:${ev._height}px;left:calc(${leftPct}% + 2px);width:calc(${anchoPct}% - 4px);right:auto" onclick="marcarHecho('${ev.id}')">${contenido}</div>`;
   }).join('');
   document.getElementById('cal-grid').innerHTML = filas + `<div class="cal-events-layer">${html}</div>`;
 }
@@ -432,6 +471,7 @@ function onCambioCategoriaManual() {
   document.getElementById('man-persona-wrap').style.display = (cat === 'muestra' || cat === 'oficina') ? 'block' : 'none';
 }
 function guardarTareaManual() {
+  if (_bloqueadoAhora()) return;
   const desc = document.getElementById('man-desc').value.trim();
   const cliente = document.getElementById('man-cliente').value.trim();
   const fecha = document.getElementById('man-fecha').value;
@@ -525,8 +565,12 @@ function guardarVincular() {
   const sheetDestino = document.getElementById('vinc-sheet').value;
   const etapa = document.getElementById('vinc-etapa').value;
   if (!nombre) { alert('Falta el nombre.'); return; }
+  const btn = event.target;
+  btn.disabled = true;
+  btn.innerText = 'Guardando…';
   apiCall('vincularEventoYCompletar', { eventId: eventoActivoId, sheetDestino, nombre, telefono, etapa })
-    .then(manejarResultado).catch(mostrarError);
+    .then(manejarResultado)
+    .catch(function(err) { btn.disabled = false; btn.innerText = 'Guardar y continuar'; mostrarError(err); });
 }
 function confirmarSimpleSi() {
   cerrarModal();
@@ -591,6 +635,7 @@ function confirmarHorarioManual(r) {
   confirmarHorarioElegido(new Date(v).toISOString(), r);
 }
 function confirmarHorarioElegido(fechaISO, r) {
+  if (_bloqueadoAhora()) return;
   if (r.requierePersona && !window._personaElegida) { alert('Elegí primero quién hace la tarea.'); return; }
   cerrarModal();
   const persona = window._personaElegida;
@@ -629,6 +674,7 @@ function confirmarACMManual() {
   confirmarACM(new Date(v).toISOString());
 }
 function confirmarACM(fechaISO) {
+  if (_bloqueadoAhora()) return;
   if (!window._personaElegida) { alert('Elegí primero quién hace "Hacer ACM".'); return; }
   cerrarModal();
   apiCall('confirmarPresentarACM', { eventId: eventoActivoId, fecha: fechaISO, persona: window._personaElegida }).then(function(res) {
@@ -663,6 +709,7 @@ function confirmarReservaManual(r) {
   confirmarReserva(new Date(v).toISOString(), r);
 }
 function confirmarReserva(fechaISO, r) {
+  if (_bloqueadoAhora()) return;
   if (!window._personaElegida) { alert('Elegí primero quién hace "Armar la reserva".'); return; }
   cerrarModal();
   const cliente = r.cliente || null, sheet = r.sheet || null, fila = r.fila || null;
@@ -680,6 +727,7 @@ function abrirRamas(opciones) {
   document.getElementById('modal-overlay').classList.add('active');
 }
 function elegirRamaClick(i) {
+  if (_bloqueadoAhora()) return;
   apiCall('elegirRama', { eventId: eventoActivoId, indice: i }).then(manejarResultado).catch(mostrarError);
 }
 
@@ -692,6 +740,7 @@ function abrirConsultaManana() {
   document.getElementById('modal-overlay').classList.add('active');
 }
 function resolverConsulta(avanza) {
+  if (_bloqueadoAhora()) return;
   apiCall('resolverConsultaManana', { eventId: eventoActivoId, avanza: avanza }).then(manejarResultado).catch(mostrarError);
 }
 
@@ -735,7 +784,15 @@ function abrirPerfil(sheet, fila) {
   apiCall('getPerfilCliente', { sheet: sheet, fila: fila }).then(function(p) {
     document.getElementById('modal-box').innerHTML = `
       <div class="modal-title">${p.nombre}</div>
-      <div class="modal-sub">📞 ${p.telefono} · Etapa: ${p.etapa}</div>
+      <div class="modal-sub">📞 ${p.telefono}</div>
+      <label class="q">Etapa</label>
+      <select class="q" id="perfil-etapa">
+        <option value="" ${!p.etapa ? 'selected' : ''}>Potencial (sin etapa)</option>
+        ${ORDEN_ETAPAS.map(e => `<option value="${e}" ${p.etapa===e?'selected':''}>${e}</option>`).join('')}
+        <option value="Perdido" ${p.etapa==='Perdido'?'selected':''}>Perdido</option>
+        <option value="Ganado" ${p.etapa==='Ganado'?'selected':''}>Ganado</option>
+      </select>
+      <button class="icon-btn" style="width:100%;border-radius:10px;margin-bottom:14px" onclick="guardarEtapaClick('${sheet}',${fila})">Guardar etapa</button>
       <label class="q">Etiquetas</label>
       <div style="margin-bottom:8px">${p.etiquetas.map(t => `<span class="ptag">${t}</span>`).join('') || '<span class="loading">Sin etiquetas.</span>'}</div>
       <div style="display:flex;gap:6px;margin-bottom:14px"><input class="q" id="in-etiqueta" placeholder="Nueva etiqueta" style="margin-bottom:0"><button class="icon-btn" style="width:auto;padding:0 12px;border-radius:10px" onclick="agregarEtiquetaClick('${sheet}',${fila})">+</button></div>
@@ -747,6 +804,14 @@ function abrirPerfil(sheet, fila) {
       <div style="display:flex;gap:6px"><input class="q" id="in-obs" placeholder="Agregar observación..." style="margin-bottom:0"><button class="icon-btn" style="width:auto;padding:0 12px;border-radius:10px" onclick="agregarObsClick('${sheet}',${fila})">+</button></div>
       <div class="modal-cancelar" onclick="cerrarModal()">Cerrar</div>`;
     document.getElementById('modal-overlay').classList.add('active');
+  }).catch(mostrarError);
+}
+function guardarEtapaClick(sheet, fila) {
+  const etapa = document.getElementById('perfil-etapa').value;
+  apiCall('cambiarEtapaCliente', { sheet: sheet, fila: fila, etapa: etapa }).then(function() {
+    alert('Etapa actualizada a: ' + (etapa || 'Potencial'));
+    cargarActivos(''); cargarPotenciales();
+    abrirPerfil(sheet, fila);
   }).catch(mostrarError);
 }
 function agregarEtiquetaClick(sheet, fila) {
@@ -777,10 +842,10 @@ function cargarPotenciales() {
   apiCall('getPotenciales', { filtro: q, tags: tagsActivos }).then(function(lista) {
     cacheVistas.potenciales = lista;
     document.getElementById('lista-potenciales').innerHTML = lista.map(p => `
-      <div class="potencial-card">
+      <div class="potencial-card" onclick="abrirPerfil('${p.sheet}', ${p.fila})">
         <div class="cliente-nombre">${p.nombre}</div><div class="cliente-tarea">${p.telefono}</div>
         <div style="margin-top:8px">${p.inversor?'<span class="ptag">💰 Inversor</span>':''}${p.reciclaje?'<span class="ptag">♻️ Recicla</span>':''}${p.tipoPropiedad?'<span class="ptag">'+p.tipoPropiedad+'</span>':''}</div>
-        <div style="margin-top:10px"><button class="btn-chico" style="background:var(--verde);color:#062b23" onclick="reactivarClick('${p.sheet}',${p.fila})">Reactivar a Activos</button></div>
+        <div style="margin-top:10px"><button class="btn-chico" style="background:var(--verde);color:#062b23" onclick="event.stopPropagation();reactivarClick('${p.sheet}',${p.fila})">Reactivar a Activos</button></div>
       </div>`).join('') || '<div class="loading">Sin resultados.</div>';
   }).catch(mostrarError);
 }
