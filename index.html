@@ -195,7 +195,7 @@
 // ================= CONEXIÓN CON LA API (Apps Script) =================
 // Pegá acá la URL de tu Web App de Apps Script (Implementar → Nueva implementación → Aplicación web).
 // Termina en /exec
-const APP_URL = 'https://script.google.com/macros/s/AKfycbyna3N9W9p23qKPBF3A_sp6q9VlkkYWcb7qrT4pAbYkZyXuN9M_jE1vYYRjoeFriX4/exec';
+const APP_URL = 'https://script.google.com/macros/s/AKfycbzN8ECu8yj4bAYYIbbWsbtD4pjFDAH_Dr39zjGfeTHWdhnOPJn4uhyIDRutCWYyFkYv5g/exec';
 
 let _jsonpContador = 0;
 function apiCall(action, params) {
@@ -283,7 +283,7 @@ function renderizarDia(eventos) {
     const inicio = new Date(ev.inicioISO), fin = new Date(ev.finISO);
     const inicioH = inicio.getHours() + inicio.getMinutes() / 60, finH = fin.getHours() + fin.getMinutes() / 60;
     const top = (inicioH - 8) * alturaHora, height = Math.max((finH - inicioH) * alturaHora - 3, 20);
-    return `<div class="cal-event ev-${ev.clase} ${ev.completada ? 'completada' : ''}" style="top:${top}px;height:${height}px" onclick="${ev.esCRM ? "marcarHecho('" + ev.id + "')" : "alert('Evento personal.')"}">${ev.completada ? '✓ ' : ''}${ev.titulo}<div class="sub">${ev.cliente}</div></div>`;
+    return `<div class="cal-event ev-${ev.clase} ${ev.completada ? 'completada' : ''}" style="top:${top}px;height:${height}px" onclick="marcarHecho('${ev.id}')">${ev.completada ? '✓ ' : ''}${ev.titulo}<div class="sub">${ev.cliente}</div></div>`;
   }).join('');
   document.getElementById('cal-grid').innerHTML = filas + `<div class="cal-events-layer">${html}</div>`;
 }
@@ -379,6 +379,20 @@ function manejarResultado(r) {
   if (r.tipo === 'horario_reserva') { abrirPropuestaHorarioReserva(r); return; }
   if (r.tipo === 'ramas') { abrirRamas(r.opciones); return; }
   if (r.tipo === 'consulta_manana') { abrirConsultaManana(); return; }
+  if (r.tipo === 'confirmar_simple') { abrirConfirmarSimple(r.titulo); return; }
+}
+
+function abrirConfirmarSimple(titulo) {
+  document.getElementById('modal-box').innerHTML = `
+    <div class="modal-title">¿Marcar como hecha?</div>
+    <div class="modal-sub">${titulo}</div>
+    <button class="opcion-btn" onclick="confirmarSimpleSi()">Sí, marcarla como hecha<span class="flecha">›</span></button>
+    <div class="modal-cancelar" onclick="cerrarModal()">Cancelar</div>`;
+  document.getElementById('modal-overlay').classList.add('active');
+}
+function confirmarSimpleSi() {
+  cerrarModal();
+  apiCall('confirmarMarcarHechoSimple', { eventId: eventoActivoId }).then(() => pintarVistaActual()).catch(mostrarError);
 }
 
 function abrirPasoLinks() {
