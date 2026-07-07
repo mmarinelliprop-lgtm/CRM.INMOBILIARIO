@@ -36,6 +36,24 @@
   .modo-cal-toggle { display:flex; background:var(--card); border-radius:14px; padding:4px; margin-bottom:12px; }
   .modo-cal-btn { flex:1; text-align:center; padding:8px 0; font-size:12px; font-weight:700; color:var(--muted); border-radius:10px; cursor:pointer; }
   .modo-cal-btn.active { background:var(--verde); color:#062b23; }
+  .cal-vista { display:none; }
+  .cal-vista.active { display:block; }
+  .semana-scroll { overflow-x:auto; border-top:1px solid var(--line); }
+  .semana-inner { display:flex; min-width:620px; position:relative; }
+  .semana-hourcol { width:38px; flex-shrink:0; }
+  .semana-hourcell { height:38px; font-size:9px; color:var(--muted); border-bottom:1px solid var(--line); padding-top:2px; }
+  .semana-daycol { flex:1; min-width:82px; border-left:1px solid var(--line); position:relative; }
+  .semana-dayhead { text-align:center; font-size:10px; color:var(--muted); font-weight:700; padding:6px 0; border-bottom:1px solid var(--line); cursor:pointer; }
+  .semana-dayhead.hoy { color:var(--verde); }
+  .semana-daybody { position:relative; }
+  .semana-hourline { height:38px; border-bottom:1px solid var(--line); }
+  .semana-event { position:absolute; left:2px; right:2px; border-radius:5px; font-size:8.5px; font-weight:700; padding:2px 4px; overflow:hidden; cursor:pointer; box-shadow:0 0 0 1px var(--bg); }
+  .mes-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:4px; margin-top:8px; }
+  .mes-dow { text-align:center; font-size:9.5px; color:var(--muted); font-weight:700; padding-bottom:6px; }
+  .mes-cell { aspect-ratio:1; border-radius:10px; background:var(--card); display:flex; flex-direction:column; align-items:center; justify-content:flex-start; padding:5px 0; font-size:11px; font-weight:700; cursor:pointer; }
+  .mes-cell.hoy { border:1.5px solid var(--verde); color:var(--verde); }
+  .mes-dots { display:flex; gap:2px; margin-top:4px; flex-wrap:wrap; justify-content:center; }
+  .mes-dot { width:5px; height:5px; border-radius:50%; }
   .cal-grid { position:relative; border-top:1px solid var(--line); }
   .cal-hour-row { height:54px; display:flex; border-bottom:1px solid var(--line); }
   .cal-hour-lbl { width:42px; font-size:10px; color:var(--muted); padding-top:4px; flex-shrink:0; }
@@ -149,7 +167,9 @@
       <div class="modo-cal-btn" data-modo="semana" onclick="cambiarModoCal('semana')">Semana</div>
       <div class="modo-cal-btn" data-modo="mes" onclick="cambiarModoCal('mes')">Mes</div>
     </div>
-    <div id="cal-grid" class="cal-grid"><div class="loading">Cargando agenda…</div></div>
+    <div id="cal-vista-dia" class="cal-vista active"><div id="cal-grid" class="cal-grid"><div class="loading">Cargando agenda…</div></div></div>
+    <div id="cal-vista-semana" class="cal-vista"><div class="semana-scroll"><div id="semana-inner" class="semana-inner"></div></div></div>
+    <div id="cal-vista-mes" class="cal-vista"><div id="mes-grid" class="mes-grid"></div></div>
   </div>
 
   <!-- CLIENTES -->
@@ -197,7 +217,7 @@
 // ================= CONEXIÓN CON LA API (Apps Script) =================
 // Pegá acá la URL de tu Web App de Apps Script (Implementar → Nueva implementación → Aplicación web).
 // Termina en /exec
-const APP_URL = 'https://script.google.com/macros/s/AKfycbyTrSMu-hy1MmxeUGylttGhiSq-ZdZAbzEGFUGge657978W3f16V7IYP5Waj4o2KAzssw/exec';
+const APP_URL = 'https://script.google.com/macros/s/AKfycbz44Qe_D5DzuGuIgp-rnzWqi9KiRfXhnWAHIoxt8ZE6F9p2JomTug1T-WqaTxuwEMWYOQ/exec';
 
 let _jsonpContador = 0;
 function apiCall(action, params) {
@@ -258,12 +278,77 @@ let diaMostrado = new Date();
 let modoCal = 'dia';
 const HORAS = []; for (let h = 8; h <= 23; h++) HORAS.push(h);
 
-function pintarVistaActual() { if (modoCal === 'dia') pintarDia(); }
+function pintarVistaActual() {
+  if (modoCal === 'dia') pintarDia();
+  else if (modoCal === 'semana') pintarSemana();
+  else pintarMes();
+}
 function cambiarModoCal(m) {
   modoCal = m;
   document.querySelectorAll('.modo-cal-btn').forEach(b => b.classList.toggle('active', b.dataset.modo === m));
+  document.querySelectorAll('.cal-vista').forEach(v => v.classList.remove('active'));
+  document.getElementById('cal-vista-' + m).classList.add('active');
   pintarVistaActual();
 }
+function mismoDia(a, b) { return a.getFullYear()===b.getFullYear() && a.getMonth()===b.getMonth() && a.getDate()===b.getDate(); }
+
+// ---- SEMANA ----
+function pintarSemana() {
+  const lunes = new Date(diaMostrado);
+  const diaSemana = (lunes.getDay() + 6) % 7;
+  lunes.setDate(lunes.getDate() - diaSemana);
+  const dias = []; for (let i = 0; i < 7; i++) { const d = new Date(lunes); d.setDate(d.getDate() + i); dias.push(d); }
+  const HORAS_SEMANA = []; for (let h = 8; h <= 20; h++) HORAS_SEMANA.push(h);
+  const alturaHora = 38;
+
+  Promise.all(dias.map(d => apiCall('getEventosDia', { fecha: d.toISOString() }))).then(function(porDia) {
+    let html = `<div class="semana-hourcol"><div style="height:24px"></div>`;
+    HORAS_SEMANA.forEach(h => html += `<div class="semana-hourcell">${String(h).padStart(2,'0')}:00</div>`);
+    html += `</div>`;
+    dias.forEach((dia, di) => {
+      const eventos = porDia[di].filter(ev => {
+        const h = new Date(ev.inicioISO).getHours();
+        return h >= 8 && h <= 20;
+      });
+      let col = `<div class="semana-daycol">`;
+      col += `<div class="semana-dayhead ${mismoDia(dia, new Date()) ? 'hoy' : ''}" onclick="irADiaSemana('${dia.toISOString()}')">${dia.toLocaleDateString('es-AR',{weekday:'short'})} ${dia.getDate()}</div>`;
+      col += `<div class="semana-daybody" style="height:${HORAS_SEMANA.length*alturaHora}px">`;
+      HORAS_SEMANA.forEach(() => col += `<div class="semana-hourline"></div>`);
+      eventos.forEach(ev => {
+        const inicio = new Date(ev.inicioISO), fin = new Date(ev.finISO);
+        const inicioH = inicio.getHours() + inicio.getMinutes()/60, finH = fin.getHours() + fin.getMinutes()/60;
+        const top = (inicioH - 8) * alturaHora, height = Math.max((finH - inicioH) * alturaHora - 2, 16);
+        col += `<div class="semana-event ev-${ev.clase} ${ev.completada?'completada':''}" style="top:${top}px;height:${height}px" onclick="marcarHecho('${ev.id}')">${ev.completada?'✓ ':''}${ev.titulo}</div>`;
+      });
+      col += `</div></div>`;
+      html += col;
+    });
+    document.getElementById('semana-inner').innerHTML = html;
+  }).catch(mostrarError);
+}
+function irADiaSemana(iso) { diaMostrado = new Date(iso); cambiarModoCal('dia'); }
+
+// ---- MES ----
+function pintarMes() {
+  const anio = diaMostrado.getFullYear(), mes = diaMostrado.getMonth();
+  apiCall('getResumenMes', { anio: anio, mes: mes }).then(function(porDia) {
+    const dow = ['L','M','M','J','V','S','D'];
+    let html = dow.map(d => `<div class="mes-dow">${d}</div>`).join('');
+    const primerDia = new Date(anio, mes, 1);
+    const offset = (primerDia.getDay() + 6) % 7;
+    const diasEnMes = new Date(anio, mes + 1, 0).getDate();
+    for (let i = 0; i < offset; i++) html += `<div class="mes-cell" style="visibility:hidden"></div>`;
+    for (let d = 1; d <= diasEnMes; d++) {
+      const fecha = new Date(anio, mes, d);
+      const esHoy = mismoDia(fecha, new Date());
+      const clases = (porDia[d] || []).slice(0, 4);
+      const dots = clases.map(c => `<div class="mes-dot ev-${c}"></div>`).join('');
+      html += `<div class="mes-cell ${esHoy?'hoy':''}" onclick="irADiaMes(${anio},${mes},${d})">${d}<div class="mes-dots">${dots}</div></div>`;
+    }
+    document.getElementById('mes-grid').innerHTML = html;
+  }).catch(mostrarError);
+}
+function irADiaMes(anio, mes, d) { diaMostrado = new Date(anio, mes, d); cambiarModoCal('dia'); }
 function navegar(delta) {
   diaMostrado.setDate(diaMostrado.getDate() + delta);
   pintarVistaActual();
@@ -304,7 +389,12 @@ function renderizarDia(eventos) {
     const anchoPct = 100 / ev._cols;
     const leftPct = anchoPct * ev._col;
     const compacto = height < 34 ? 'compacto' : '';
-    return `<div class="cal-event ev-${ev.clase} ${ev.completada ? 'completada' : ''} ${compacto}" style="top:${top}px;height:${height}px;left:calc(${leftPct}% + 2px);width:calc(${anchoPct}% - 4px);right:auto" onclick="marcarHecho('${ev.id}')">${ev.completada ? '✓ ' : ''}${ev.titulo}<div class="sub">${ev.cliente}</div></div>`;
+    const horaTxt = ev.hora;
+    const subTxt = [ev.cliente, ev.ubicacion].filter(Boolean).join(' · ');
+    const contenido = compacto
+      ? `${ev.completada ? '✓ ' : ''}${horaTxt} · ${ev.titulo}${subTxt ? ' · ' + subTxt : ''}`
+      : `${ev.completada ? '✓ ' : ''}${ev.titulo}<div class="sub">${horaTxt}${subTxt ? ' · ' + subTxt : ''}</div>`;
+    return `<div class="cal-event ev-${ev.clase} ${ev.completada ? 'completada' : ''} ${compacto}" style="top:${top}px;height:${height}px;left:calc(${leftPct}% + 2px);width:calc(${anchoPct}% - 4px);right:auto" onclick="marcarHecho('${ev.id}')">${contenido}</div>`;
   }).join('');
   document.getElementById('cal-grid').innerHTML = filas + `<div class="cal-events-layer">${html}</div>`;
 }
@@ -617,21 +707,27 @@ function cargarActivos(filtro) {
   apiCall('getClientesActivos', { filtro: filtro || '' }).then(function(clientes) { cacheVistas.activos = clientes; renderizarActivos(clientes); }).catch(mostrarError);
 }
 const ORDEN_ETAPAS = ['Contacto nuevo','Prelisting','Presentación de ACM','Publicación','Esperando info','Búsqueda permuta','Búsqueda activa','Muestra','Reserva','Cierre'];
+const COLOR_ETAPA = {
+  'Contacto nuevo': '#D9823E', 'Prelisting': '#CDD24C', 'Presentación de ACM': '#5DCB5B', 'Publicación': '#14DBA0',
+  'Esperando info': '#3FC0F5', 'Búsqueda permuta': '#3D5FF5', 'Búsqueda activa': '#9B2FF2', 'Muestra': '#F62FE8',
+  'Reserva': '#FF2E82', 'Cierre': '#FF3B45'
+};
 function renderizarActivos(clientes) {
   const grupos = {};
   clientes.forEach(c => { grupos[c.etapa] = grupos[c.etapa] || []; grupos[c.etapa].push(c); });
-  const etapasOrdenadas = ORDEN_ETAPAS.filter(e => grupos[e]).concat(Object.keys(grupos).filter(e => !ORDEN_ETAPAS.includes(e)));
+  const etapasOrdenadas = ORDEN_ETAPAS.concat(Object.keys(grupos).filter(e => !ORDEN_ETAPAS.includes(e)));
   document.getElementById('grupos-activos').innerHTML = etapasOrdenadas.map(etapa => {
-    const items = grupos[etapa];
+    const items = grupos[etapa] || [];
+    const color = (items[0] && items[0].color) || COLOR_ETAPA[etapa] || '#8b8fa8';
     const filas = items.map(c => `
       <div class="cliente-row" onclick="abrirPerfil('${c.sheet}', ${c.fila})">
         <div style="flex:1"><div class="cliente-nombre">${c.nombre}${c.asesor ? ' <span style="color:var(--muted);font-weight:500;font-size:10.5px">· ' + c.asesor + '</span>' : ''}</div><div class="cliente-tarea">${c.proximaTarea}${c.proximaFechaISO ? ' · ' + new Date(c.proximaFechaISO).toLocaleDateString('es-AR',{day:'2-digit',month:'2-digit'}) : ''}</div></div>
         <div class="cliente-actions">
           <button class="icon-btn" onclick="event.stopPropagation();abrirWhatsapp('${c.telefono}')">💬</button>
         </div>
-      </div>`).join('');
-    return `<div class="grupo" style="background:${items[0].color}"><div class="grupo-head" onclick="this.parentElement.classList.toggle('abierto')"><span>${etapa} (${items.length})</span><span class="chev">⌄</span></div><div class="grupo-body">${filas}</div></div>`;
-  }).join('') || '<div class="loading">Sin clientes activos.</div>';
+      </div>`).join('') || '<div class="loading" style="padding:8px 4px">Sin clientes en esta etapa.</div>';
+    return `<div class="grupo" style="background:${color}"><div class="grupo-head" onclick="this.parentElement.classList.toggle('abierto')"><span>${etapa} (${items.length})</span><span class="chev">⌄</span></div><div class="grupo-body">${filas}</div></div>`;
+  }).join('');
 }
 function abrirWhatsapp(tel) { window.open('https://wa.me/54' + (tel || '').replace(/\D/g,''), '_blank'); }
 
