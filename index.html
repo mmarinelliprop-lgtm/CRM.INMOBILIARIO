@@ -65,7 +65,7 @@
   .cal-event.compacto .sub { display:none; }
   .ev-lila{background:var(--lila);color:#1c0f33} .ev-magenta{background:var(--magenta);color:#2c0518}
   .ev-azul{background:var(--azul);color:#041a2c} .ev-verde{background:var(--verde);color:#06281c} .ev-naranja{background:var(--naranja);color:#2c1600}
-  .completada { opacity:.4; text-decoration:line-through; }
+  .completada { }
 
   /* MODAL */
   .modal-overlay { position:fixed; inset:0; background:rgba(10,11,25,.75); display:none; align-items:flex-end; z-index:70; }
@@ -122,6 +122,8 @@
   .chat-input-row { display:flex; gap:8px; align-items:center; padding:10px 0 4px; border-top:1px solid var(--line); }
   .chat-text-input { flex:1; background:var(--card); border:1px solid var(--line); border-radius:20px; padding:11px 15px; color:var(--text); font-size:13.5px; font-family:'Manrope',sans-serif; }
   .chat-send { width:40px; height:40px; border-radius:50%; background:var(--verde); border:none; color:#062b23; font-size:16px; cursor:pointer; }
+  .chat-attach { width:40px; height:40px; border-radius:50%; background:var(--card); display:flex; align-items:center; justify-content:center; font-size:16px; cursor:pointer; position:relative; flex-shrink:0; }
+  .chat-attach input { position:absolute; inset:0; opacity:0; cursor:pointer; }
 
   /* METAS */
   .card { background:var(--card); border-radius:20px; padding:16px; margin-bottom:12px; margin-top:14px; }
@@ -194,6 +196,7 @@
     <div class="chat-wrap">
       <div class="chat-msgs" id="chat-msgs"></div>
       <div class="chat-input-row">
+        <div class="chat-attach">📎<input type="file" id="chat-file" accept="image/*" onchange="enviarImagenChat(this)"></div>
         <input class="chat-text-input" id="chat-input" placeholder="Escribí acá..." onkeydown="if(event.key==='Enter')enviarChat()">
         <button class="chat-send" onclick="enviarChat()">➤</button>
       </div>
@@ -217,7 +220,7 @@
 // ================= CONEXIÓN CON LA API (Apps Script) =================
 // Pegá acá la URL de tu Web App de Apps Script (Implementar → Nueva implementación → Aplicación web).
 // Termina en /exec
-const APP_URL = 'https://script.google.com/macros/s/AKfycbw8l-86iAHnohyHXgB1TW2soK_oy77fUYedQWN129GkLTYXymt0NgXtxj_paXo-_-aShg/exec';
+const APP_URL = 'https://script.google.com/macros/s/AKfycbxIQ2FEvbsruRUnn0bLM7f5a54oQFNAC5yFLsxFOGZRdW7s3W3ebxzk0NZU40WwT0lthQ/exec';
 
 let _accionEnCurso = false;
 function _bloqueadoAhora() { if (_accionEnCurso) return true; _accionEnCurso = true; setTimeout(() => { _accionEnCurso = false; }, 4000); return false; }
@@ -793,6 +796,7 @@ function abrirPerfil(sheet, fila) {
         <option value="Ganado" ${p.etapa==='Ganado'?'selected':''}>Ganado</option>
       </select>
       <button class="icon-btn" style="width:100%;border-radius:10px;margin-bottom:14px" onclick="guardarEtapaClick('${sheet}',${fila})">Guardar etapa</button>
+      <button class="icon-btn" style="width:100%;border-radius:10px;margin-bottom:14px;background:var(--verde);color:#062b23;font-weight:800" onclick="abrirAgendarTarea('${sheet}',${fila},'${p.nombre.replace(/'/g,"\\'")}')">📅 Agendar tarea</button>
       <label class="q">Etiquetas</label>
       <div style="margin-bottom:8px">${p.etiquetas.map(t => `<span class="ptag">${t}</span>`).join('') || '<span class="loading">Sin etiquetas.</span>'}</div>
       <div style="display:flex;gap:6px;margin-bottom:14px"><input class="q" id="in-etiqueta" placeholder="Nueva etiqueta" style="margin-bottom:0"><button class="icon-btn" style="width:auto;padding:0 12px;border-radius:10px" onclick="agregarEtiquetaClick('${sheet}',${fila})">+</button></div>
@@ -813,6 +817,94 @@ function guardarEtapaClick(sheet, fila) {
     cargarActivos(''); cargarPotenciales();
     abrirPerfil(sheet, fila);
   }).catch(mostrarError);
+}
+
+// ---- Agendar tarea desde el perfil ----
+function abrirAgendarTarea(sheet, fila, nombre) {
+  document.getElementById('modal-box').innerHTML = `
+    <div class="modal-title">Agendar tarea — ${nombre}</div>
+    <div class="modal-sub">¿Cómo querés agendarla?</div>
+    <button class="opcion-btn" onclick="mostrarAgendarEtapa('${sheet}',${fila},'${nombre.replace(/'/g,"\\'")}')">Elegir una etapa del workflow<span class="flecha">›</span></button>
+    <button class="opcion-btn" onclick="mostrarAgendarLibre('${sheet}',${fila},'${nombre.replace(/'/g,"\\'")}')">Escribir una tarea libre<span class="flecha">›</span></button>
+    <div class="modal-cancelar" onclick="abrirPerfil('${sheet}', ${fila})">Volver al perfil</div>`;
+}
+function mostrarAgendarEtapa(sheet, fila, nombre) {
+  document.getElementById('modal-box').innerHTML = `
+    <div class="modal-title">Elegir etapa</div>
+    <label class="q">Etapa del workflow</label>
+    <select class="q" id="ag-etapa">${ORDEN_ETAPAS.map(e => `<option value="${e}">${e}</option>`).join('')}</select>
+    <button class="btn-continuar" onclick="continuarAgendarEtapa('${sheet}',${fila},'${nombre.replace(/'/g,"\\'")}')">Siguiente: elegir horario</button>
+    <div class="modal-cancelar" onclick="abrirAgendarTarea('${sheet}',${fila},'${nombre.replace(/'/g,"\\'")}')">Volver</div>`;
+}
+function continuarAgendarEtapa(sheet, fila, nombre) {
+  const etapa = document.getElementById('ag-etapa').value;
+  apiCall('proponerHorarios', {}).then(function(slots) {
+    const necesitaPersona = etapa === 'Muestra' || ['Contacto nuevo','Prelisting','Presentación de ACM','Publicación','Esperando info','Búsqueda permuta','Búsqueda activa'].includes(etapa);
+    document.getElementById('modal-box').innerHTML = `
+      <div class="modal-title">¿Cuándo?</div>
+      <div class="modal-sub">${etapa} — ${nombre}</div>
+      ${necesitaPersona ? `<label class="q">¿Quién la hace?</label>
+        <div style="display:flex;gap:8px;margin-bottom:12px">
+          <button class="opcion-btn" id="persona-jose" style="flex:1;text-align:center" onclick="elegirPersona('Jose')">José</button>
+          <button class="opcion-btn" id="persona-martu" style="flex:1;text-align:center" onclick="elegirPersona('Martu')">Vos (Martu)</button>
+        </div>` : ''}
+      ${slots.map(s => `<button class="opcion-btn" onclick="confirmarAgendarEtapa('${sheet}',${fila},'${etapa}','${s}')">${new Date(s).toLocaleString('es-AR',{weekday:'short',day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}<span class="flecha">›</span></button>`).join('')}
+      <label class="q">O elegí manual:</label><input type="datetime-local" id="ag-fecha-manual">
+      <button class="btn-continuar" onclick="confirmarAgendarEtapaManual('${sheet}',${fila},'${etapa}')">Confirmar horario manual</button>
+      <div class="modal-cancelar" onclick="cerrarModal()">Cancelar</div>`;
+    window._personaElegida = null;
+  }).catch(mostrarError);
+}
+function confirmarAgendarEtapaManual(sheet, fila, etapa) {
+  const v = document.getElementById('ag-fecha-manual').value;
+  if (!v) return;
+  confirmarAgendarEtapa(sheet, fila, etapa, new Date(v).toISOString());
+}
+function confirmarAgendarEtapa(sheet, fila, etapa, fechaISO) {
+  if (_bloqueadoAhora()) return;
+  apiCall('agendarTareaEtapa', { sheet: sheet, fila: fila, etapa: etapa, fecha: fechaISO, persona: window._personaElegida })
+    .then(function() { cerrarModal(); alert('Tarea agendada y etapa actualizada.'); pintarVistaActual(); cargarActivos(''); })
+    .catch(mostrarError);
+}
+
+function mostrarAgendarLibre(sheet, fila, nombre) {
+  const def = new Date(); def.setHours(def.getHours() + 2, 0, 0, 0);
+  document.getElementById('modal-box').innerHTML = `
+    <div class="modal-title">Tarea libre — ${nombre}</div>
+    <label class="q">Descripción</label><input class="q" id="ag-desc" placeholder="Ej: Llamar por documentación">
+    <label class="q">Día y horario</label><input type="datetime-local" id="ag-fecha" value="${toDatetimeLocal(def)}">
+    <label class="q">¿En qué calendario va?</label>
+    <select class="q" id="ag-categoria" onchange="onCambioCategoriaLibre()">
+      <option value="reuniones">Reuniones</option>
+      <option value="captacion">Captación</option>
+      <option value="muestra">Muestra</option>
+      <option value="oficina">Oficina</option>
+    </select>
+    <div id="ag-persona-wrap" style="display:none">
+      <label class="q">¿Quién la hace?</label>
+      <div style="display:flex;gap:8px;margin-bottom:12px">
+        <button class="opcion-btn" id="persona-jose" style="flex:1;text-align:center" onclick="elegirPersona('Jose')">José</button>
+        <button class="opcion-btn" id="persona-martu" style="flex:1;text-align:center" onclick="elegirPersona('Martu')">Vos (Martu)</button>
+      </div>
+    </div>
+    <button class="btn-continuar" onclick="confirmarAgendarLibre('${sheet}',${fila},'${nombre.replace(/'/g,"\\'")}')">Agendar</button>
+    <div class="modal-cancelar" onclick="abrirAgendarTarea('${sheet}',${fila},'${nombre.replace(/'/g,"\\'")}')">Volver</div>`;
+  window._personaElegida = null;
+}
+function onCambioCategoriaLibre() {
+  const cat = document.getElementById('ag-categoria').value;
+  document.getElementById('ag-persona-wrap').style.display = (cat === 'muestra' || cat === 'oficina') ? 'block' : 'none';
+}
+function confirmarAgendarLibre(sheet, fila, nombre) {
+  if (_bloqueadoAhora()) return;
+  const desc = document.getElementById('ag-desc').value.trim();
+  const fecha = document.getElementById('ag-fecha').value;
+  const categoria = document.getElementById('ag-categoria').value;
+  if (!desc || !fecha) { alert('Falta la descripción o el horario.'); return; }
+  if ((categoria === 'muestra' || categoria === 'oficina') && !window._personaElegida) { alert('Elegí quién la hace.'); return; }
+  apiCall('crearTareaManual', { descripcion: desc + ' - ' + nombre, cliente: nombre, fecha: new Date(fecha).toISOString(), categoria: categoria, persona: window._personaElegida, sheet: sheet, fila: fila })
+    .then(function() { cerrarModal(); alert('Tarea agendada.'); pintarVistaActual(); })
+    .catch(mostrarError);
 }
 function agregarEtiquetaClick(sheet, fila) {
   const v = document.getElementById('in-etiqueta').value.trim(); if (!v) return;
@@ -855,49 +947,92 @@ function reactivarClick(sheet, fila) {
   apiCall('reactivarAActivos', { sheet: sheet, fila: fila, etapa: etapa }).then(() => { cargarPotenciales(); alert('Reactivado.'); }).catch(mostrarError);
 }
 
-// ================= CARGA (chat) =================
-const chatState = { paso: 'inicio', datos: {} };
+// ================= CARGA (chat con IA) =================
+let chatHistorial = [];
+let chatDatosAcumulados = {};
 function chatMsgs() { return document.getElementById('chat-msgs'); }
 function addBotMsg(t) { const d=document.createElement('div'); d.className='msg msg-bot'; d.innerText=t; chatMsgs().appendChild(d); chatMsgs().scrollTop=chatMsgs().scrollHeight; }
 function addUserMsg(t) { const d=document.createElement('div'); d.className='msg msg-user'; d.innerText=t; chatMsgs().appendChild(d); chatMsgs().scrollTop=chatMsgs().scrollHeight; }
-function addQuickReplies(ops) {
+function addLoadingMsg() { const d=document.createElement('div'); d.className='msg msg-bot'; d.id='chat-loading'; d.innerText='…'; chatMsgs().appendChild(d); chatMsgs().scrollTop=chatMsgs().scrollHeight; }
+function quitarLoadingMsg() { const d=document.getElementById('chat-loading'); if (d) d.remove(); }
+function addQuickReplies(ops, cb) {
   const wrap=document.createElement('div'); wrap.className='quick-replies';
-  ops.forEach(op => { const b=document.createElement('div'); b.className='quick-reply'; b.innerText=op; b.onclick=()=>{addUserMsg(op);wrap.remove();procesarChat(op);}; wrap.appendChild(b); });
+  ops.forEach(op => { const b=document.createElement('div'); b.className='quick-reply'; b.innerText=op; b.onclick=()=>{addUserMsg(op);wrap.remove();cb(op);}; wrap.appendChild(b); });
   chatMsgs().appendChild(wrap); chatMsgs().scrollTop=chatMsgs().scrollHeight;
 }
 function iniciarChat() {
-  chatMsgs().innerHTML = ''; chatState.paso='inicio'; chatState.datos={};
-  addBotMsg('Hola 👋 Contame de quién se trata.');
+  chatMsgs().innerHTML = '';
+  chatHistorial = [];
+  chatDatosAcumulados = {};
+  addBotMsg('Hola 👋 Contame de quién se trata, o mandame una captura de WhatsApp o de un lead de Meta.');
 }
 function enviarChat() {
-  const input = document.getElementById('chat-input'); const t = input.value.trim();
-  if (!t) return; addUserMsg(t); input.value=''; procesarChat(t);
+  const input = document.getElementById('chat-input');
+  const t = input.value.trim();
+  if (!t) return;
+  addUserMsg(t);
+  input.value = '';
+  chatHistorial.push({ role: 'user', text: t });
+  llamarIA();
 }
-function procesarChat(texto) {
-  setTimeout(() => {
-    if (chatState.paso === 'inicio') {
-      chatState.datos.NOMBRE = texto; addBotMsg('¿Cuál es el teléfono?'); chatState.paso='telefono';
-    } else if (chatState.paso === 'telefono') {
-      chatState.datos.TELEFONO = texto;
-      apiCall('chequearDuplicado', { nombre: chatState.datos.NOMBRE, telefono: texto }).then(function(res) {
-        if (res.duplicado) { addBotMsg('⚠️ Ya existe: ' + res.nombre + ' (' + res.etapa + '). ¿Seguimos?'); addQuickReplies(['Seguir igual','Cancelar']); chatState.paso='dupconfirm'; }
-        else { addBotMsg('Perfecto, ¿alguna observación?'); chatState.paso='obs'; }
-      }).catch(mostrarError);
-    } else if (chatState.paso === 'dupconfirm') {
-      if (texto.indexOf('Seguir')!==-1) { addBotMsg('Perfecto, ¿alguna observación?'); chatState.paso='obs'; }
-      else { addBotMsg('Cancelado.'); chatState.paso='inicio'; chatState.datos={}; }
-    } else if (chatState.paso === 'obs') {
-      chatState.datos.OBSERVACION = texto;
-      addBotMsg('Guardo y armo la primera tarea. ¿Confirmás?'); addQuickReplies(['Sí, guardar','Cancelar']); chatState.paso='confirmar';
-    } else if (chatState.paso === 'confirmar') {
-      if (texto.indexOf('Sí')!==-1 || texto.indexOf('Si')!==-1) {
-        apiCall('agregarConsultaRapida', { datos: chatState.datos }).then(function() {
-          addBotMsg('✅ Guardado. Tarea creada en tu agenda.');
-          setTimeout(() => { addBotMsg('¿Cargamos otro?'); chatState.paso='inicio'; chatState.datos={}; }, 600);
-        }).catch(mostrarError);
-      } else { addBotMsg('Ok, no lo guardo.'); chatState.paso='inicio'; chatState.datos={}; }
+function enviarImagenChat(inputFile) {
+  const file = inputFile.files[0];
+  if (!file) return;
+  addUserMsg('📷 Imagen enviada');
+  const reader = new FileReader();
+  reader.onload = function() {
+    const base64 = reader.result.split(',')[1];
+    chatHistorial.push({ role: 'user', text: '(el usuario adjuntó una imagen, leela)', imagenBase64: base64 });
+    llamarIA();
+  };
+  reader.readAsDataURL(file);
+  inputFile.value = '';
+}
+function llamarIA() {
+  addLoadingMsg();
+  apiCall('procesarMensajeIA', { historial: chatHistorial }).then(function(res) {
+    quitarLoadingMsg();
+    if (res.error) { mostrarError(new Error(res.error)); return; }
+    ['nombre','telefono','barrio','tipoPropiedad','dormitorios','valor','observacion'].forEach(k => {
+      if (res[k]) chatDatosAcumulados[k] = res[k];
+    });
+    addBotMsg(res.respuesta || '¿Podés repetirlo?');
+    chatHistorial.push({ role: 'bot', text: res.respuesta || '' });
+    if (res.listoParaGuardar) {
+      addQuickReplies(['Sí, guardar', 'Todavía no'], function(op) {
+        if (op.indexOf('Sí') !== -1) confirmarGuardarChat();
+        else { addBotMsg('Dale, seguí contándome.'); }
+      });
     }
-  }, 400);
+  }).catch(function(err) { quitarLoadingMsg(); mostrarError(err); });
+}
+function confirmarGuardarChat() {
+  if (_bloqueadoAhora()) return;
+  apiCall('chequearDuplicado', { nombre: chatDatosAcumulados.nombre || '', telefono: chatDatosAcumulados.telefono || '' }).then(function(dup) {
+    if (dup.duplicado) {
+      addBotMsg('⚠️ Ya existe un contacto parecido: ' + dup.nombre + ' (' + (dup.etapa || 'Potencial') + '). ¿Guardo igual?');
+      addQuickReplies(['Guardar igual', 'Cancelar'], function(op) {
+        if (op.indexOf('Guardar') !== -1) guardarDesdeChat(); else addBotMsg('Cancelado. ¿Cargamos otro?');
+      });
+    } else {
+      guardarDesdeChat();
+    }
+  }).catch(mostrarError);
+}
+function guardarDesdeChat() {
+  const datos = {
+    NOMBRE: chatDatosAcumulados.nombre || '',
+    TELEFONO: chatDatosAcumulados.telefono || '',
+    BARRIO: chatDatosAcumulados.barrio || '',
+    'TIPO DE PROP': chatDatosAcumulados.tipoPropiedad || '',
+    DORMITORIOS: chatDatosAcumulados.dormitorios || '',
+    VALOR: chatDatosAcumulados.valor || '',
+    OBSERVACION: chatDatosAcumulados.observacion || ''
+  };
+  apiCall('agregarConsultaRapida', { datos: datos }).then(function() {
+    addBotMsg('✅ Guardado. Tarea creada en tu agenda.');
+    setTimeout(() => { addBotMsg('¿Cargamos otro?'); chatHistorial = []; chatDatosAcumulados = {}; }, 500);
+  }).catch(mostrarError);
 }
 
 // ================= METAS =================
