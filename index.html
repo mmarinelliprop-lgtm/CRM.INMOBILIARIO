@@ -32,6 +32,8 @@
   .cal-day { font-size:12.5px; color:var(--muted); }
   .cal-num { font-size:24px; font-weight:800; }
   .cal-nav { display:flex; gap:14px; color:var(--muted); font-size:18px; }
+  .cal-nav span { padding:4px 8px; border-radius:8px; transition:background .1s, transform .1s; cursor:pointer; }
+  .cal-nav span:active, .cal-nav span.pulsando { background:var(--card); transform:scale(0.85); color:var(--verde); }
   .cal-mes { font-size:12.5px; color:var(--muted); font-weight:700; }
   .modo-cal-toggle { display:flex; background:var(--card); border-radius:14px; padding:4px; margin-bottom:12px; }
   .modo-cal-btn { flex:1; text-align:center; padding:8px 0; font-size:12px; font-weight:700; color:var(--muted); border-radius:10px; cursor:pointer; }
@@ -57,7 +59,7 @@
   .cal-grid { position:relative; border-top:1px solid var(--line); }
   .cal-hour-row { height:80px; display:flex; border-bottom:1px solid var(--line); }
   .cal-hour-lbl { width:42px; font-size:10px; color:var(--muted); padding-top:4px; flex-shrink:0; }
-  .cal-hour-line { flex:1; }
+  .cal-hour-line { flex:1; cursor:pointer; }
   .cal-events-layer { position:absolute; top:0; left:46px; right:0; bottom:0; }
   .cal-event { position:absolute; left:2px; right:2px; border-radius:6px; padding:4px 8px; font-size:11px; font-weight:700; overflow:hidden; cursor:pointer; box-shadow:0 0 0 2px var(--bg); line-height:1.25; }
   .cal-event .sub { font-size:9px; font-weight:500; opacity:.85; margin-top:1px; }
@@ -81,6 +83,9 @@
   label.q { display:block; font-size:11px; color:var(--muted); font-weight:700; margin:10px 0 5px; }
   .link-chip { display:flex; align-items:center; gap:8px; background:var(--card-2); border-radius:10px; padding:9px 10px; margin-bottom:8px; font-size:12px; }
   .link-chip .url { flex:1; word-break:break-all; color:var(--verde); }
+  .hist-item { font-size:11.5px; color:var(--muted); padding:7px 0; border-bottom:1px solid var(--line); }
+  .hist-item:last-child { border-bottom:none; }
+  .hist-item b { color:var(--text); }
   .btn-detectar,.btn-continuar { width:100%; border:none; border-radius:12px; padding:12px; font-size:13px; font-weight:700; cursor:pointer; margin-bottom:12px; }
   .btn-detectar { background:var(--card-2); color:var(--text); border:1px solid var(--line); }
   .btn-continuar { background:var(--verde); color:#062b23; font-weight:800; }
@@ -162,7 +167,7 @@
     <div class="cal-header">
       <div><div class="cal-day" id="cal-day-lbl"></div><div class="cal-num" id="cal-num-lbl"></div></div>
       <div class="cal-mes" id="cal-mes-lbl"></div>
-      <div class="cal-nav"><span onclick="navegar(-1)">‹</span><span onclick="navegar(1)">›</span></div>
+      <div class="cal-nav"><span onclick="navegar(-1, this)">‹</span><span onclick="navegar(1, this)">›</span></div>
     </div>
     <div class="modo-cal-toggle">
       <div class="modo-cal-btn active" data-modo="dia" onclick="cambiarModoCal('dia')">Día</div>
@@ -321,12 +326,14 @@ function pintarSemana() {
   const HORAS_SEMANA = []; for (let h = 8; h <= 20; h++) HORAS_SEMANA.push(h);
   const alturaHora = 38;
 
-  Promise.all(dias.map(d => apiCall('getEventosDia', { fecha: d.toISOString() }))).then(function(porDia) {
+  document.getElementById('semana-inner').innerHTML = '<div class="loading">Cargando semana…</div>';
+  apiCall('getEventosSemana', { fechaLunes: lunes.toISOString() }).then(function(porDiaKey) {
+    function claveDia(d) { const p = n => String(n).padStart(2,'0'); return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()); }
     let html = `<div class="semana-hourcol"><div style="height:24px"></div>`;
     HORAS_SEMANA.forEach(h => html += `<div class="semana-hourcell">${String(h).padStart(2,'0')}:00</div>`);
     html += `</div>`;
-    dias.forEach((dia, di) => {
-      const eventos = porDia[di].filter(ev => {
+    dias.forEach((dia) => {
+      const eventos = (porDiaKey[claveDia(dia)] || []).filter(ev => {
         const h = new Date(ev.inicioISO).getHours();
         return h >= 8 && h <= 20;
       });
@@ -369,7 +376,8 @@ function pintarMes() {
   }).catch(mostrarError);
 }
 function irADiaMes(anio, mes, d) { diaMostrado = new Date(anio, mes, d); cambiarModoCal('dia'); }
-function navegar(delta) {
+function navegar(delta, el) {
+  if (el) { el.classList.add('pulsando'); setTimeout(() => el.classList.remove('pulsando'), 200); }
   diaMostrado.setDate(diaMostrado.getDate() + delta);
   pintarVistaActual();
 }
@@ -384,7 +392,7 @@ function pintarDia() {
 }
 function renderizarDia(eventos) {
   let filas = '';
-  HORAS.forEach(h => filas += `<div class="cal-hour-row"><div class="cal-hour-lbl">${String(h).padStart(2,'0')}:00</div><div class="cal-hour-line"></div></div>`);
+  HORAS.forEach(h => filas += `<div class="cal-hour-row"><div class="cal-hour-lbl">${String(h).padStart(2,'0')}:00</div><div class="cal-hour-line" onclick="abrirTareaManual(${h})"></div></div>`);
   const alturaHora = 80;
   const SEPARACION = 4;
 
@@ -443,13 +451,17 @@ function renderizarDia(eventos) {
 
 // ---- Tarea manual ----
 function toDatetimeLocal(d) { const p = n => String(n).padStart(2,'0'); return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+'T'+p(d.getHours())+':'+p(d.getMinutes()); }
-function abrirTareaManual() {
-  const def = new Date(diaMostrado); def.setHours(10,0,0,0);
+function abrirTareaManual(horaSugerida) {
+  const def = new Date(diaMostrado);
+  if (horaSugerida !== undefined) def.setHours(horaSugerida, 0, 0, 0);
+  else def.setHours(10, 0, 0, 0);
   document.getElementById('modal-box').innerHTML = `
-    <div class="modal-title">Nueva tarea manual</div>
-    <label class="q">Descripción</label><input class="q" id="man-desc" placeholder="Ej: Llamar a la inmobiliaria vecina">
-    <label class="q">Cliente (opcional)</label><input class="q" id="man-cliente" placeholder="Ej: Julián Torres">
+    <div class="modal-title">Nueva tarea</div>
+    <label class="q">Título</label><input class="q" id="man-titulo" placeholder="Ej: Llamar a la inmobiliaria vecina">
+    <label class="q">Descripción / nota (opcional)</label><textarea class="q" id="man-nota" rows="2" placeholder="Detalle adicional..."></textarea>
     <label class="q">Día y horario</label><input type="datetime-local" id="man-fecha" value="${toDatetimeLocal(def)}">
+    <label class="q">Duración (minutos)</label><input type="number" class="q" id="man-duracion" value="30" min="5" step="5">
+    <label class="q">Ubicación (opcional)</label><input class="q" id="man-ubicacion" placeholder="Ej: España 298">
     <label class="q">¿En qué calendario va?</label>
     <select class="q" id="man-categoria" onchange="onCambioCategoriaManual()">
       <option value="reuniones">Reuniones</option>
@@ -475,13 +487,15 @@ function onCambioCategoriaManual() {
 }
 function guardarTareaManual() {
   if (_bloqueadoAhora()) return;
-  const desc = document.getElementById('man-desc').value.trim();
-  const cliente = document.getElementById('man-cliente').value.trim();
+  const titulo = document.getElementById('man-titulo').value.trim();
+  const nota = document.getElementById('man-nota').value.trim();
   const fecha = document.getElementById('man-fecha').value;
+  const duracion = document.getElementById('man-duracion').value || 30;
+  const ubicacion = document.getElementById('man-ubicacion').value.trim();
   const categoria = document.getElementById('man-categoria').value;
-  if (!desc || !fecha) return;
+  if (!titulo || !fecha) { alert('Falta el título o el horario.'); return; }
   if ((categoria === 'muestra' || categoria === 'oficina') && !window._personaElegida) { alert('Elegí primero quién la hace.'); return; }
-  apiCall('crearTareaManual', { descripcion: desc, cliente: cliente, fecha: new Date(fecha).toISOString(), categoria: categoria, persona: window._personaElegida })
+  apiCall('crearTareaManual', { titulo: titulo, nota: nota, fecha: new Date(fecha).toISOString(), duracion: duracion, categoria: categoria, persona: window._personaElegida, ubicacion: ubicacion })
     .then(() => { cerrarModal(); pintarVistaActual(); }).catch(mostrarError);
 }
 
@@ -525,7 +539,7 @@ function marcarHecho(id) {
   apiCall('iniciarCompletarTarea', { eventId: id }).then(manejarResultado).catch(mostrarError);
 }
 function manejarResultado(r) {
-  if (r.tipo === 'ya_completada') { alert('Esta tarea ya está completada.'); return; }
+  if (r.tipo === 'ya_completada') { abrirDeshacer(); return; }
   if (r.tipo === 'completada_simple' || r.tipo === 'terminal' || r.tipo === 'ok_simple') { pintarVistaActual(); return; }
   if (r.tipo === 'links') { abrirPasoLinks(); return; }
   if (r.tipo === 'horario') { abrirPropuestaHorario(r); return; }
@@ -534,6 +548,18 @@ function manejarResultado(r) {
   if (r.tipo === 'ramas') { abrirRamas(r.opciones); return; }
   if (r.tipo === 'consulta_manana') { abrirConsultaManana(); return; }
   if (r.tipo === 'confirmar_simple') { abrirConfirmarSimple(r.titulo); return; }
+}
+function abrirDeshacer() {
+  document.getElementById('modal-box').innerHTML = `
+    <div class="modal-title">Esta tarea ya está completada</div>
+    <div class="modal-sub">¿Querés deshacerla?</div>
+    <button class="opcion-btn" onclick="confirmarDeshacer()">Sí, deshacer<span class="flecha">›</span></button>
+    <div class="modal-cancelar" onclick="cerrarModal()">Cerrar</div>`;
+  document.getElementById('modal-overlay').classList.add('active');
+}
+function confirmarDeshacer() {
+  if (_bloqueadoAhora()) return;
+  apiCall('deshacerTarea', { eventId: eventoActivoId }).then(() => { cerrarModal(); pintarVistaActual(); }).catch(mostrarError);
 }
 
 function abrirConfirmarSimple(titulo) {
@@ -886,7 +912,9 @@ function abrirPerfil(sheet, fila) {
       <div style="display:flex;gap:6px;margin-bottom:14px"><input class="q" id="in-link" placeholder="Pegá el link..." style="margin-bottom:0"><button class="icon-btn" style="width:auto;padding:0 12px;border-radius:10px" onclick="agregarLinkClick('${sheet}',${fila})">+</button></div>
       <label class="q">Observaciones</label>
       <div style="margin-bottom:8px">${p.observaciones.map(o => `<div class="link-chip"><span class="url">${o.texto}</span></div>`).join('') || '<div class="loading">Sin observaciones.</div>'}
-      <div style="display:flex;gap:6px"><input class="q" id="in-obs" placeholder="Agregar observación..." style="margin-bottom:0"><button class="icon-btn" style="width:auto;padding:0 12px;border-radius:10px" onclick="agregarObsClick('${sheet}',${fila})">+</button></div>
+      <div style="display:flex;gap:6px;margin-bottom:14px"><input class="q" id="in-obs" placeholder="Agregar observación..." style="margin-bottom:0"><button class="icon-btn" style="width:auto;padding:0 12px;border-radius:10px" onclick="agregarObsClick('${sheet}',${fila})">+</button></div>
+      <label class="q">Historial</label>
+      <div style="margin-bottom:8px;max-height:220px;overflow-y:auto">${(p.historial||[]).map(h => `<div class="hist-item"><b>${new Date(h.fecha).toLocaleDateString('es-AR',{day:'2-digit',month:'2-digit',year:'2-digit'})} ${new Date(h.fecha).toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'})}</b> — ${h.texto}</div>`).join('') || '<div class="loading">Todavía no hay historial.</div>'}</div>
       <div class="modal-cancelar" onclick="cerrarModal()">Cerrar</div>`;
     document.getElementById('modal-overlay').classList.add('active');
   }).catch(mostrarError);
