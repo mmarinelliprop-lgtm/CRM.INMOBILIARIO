@@ -249,10 +249,14 @@
     </div>
   </div>
 
+  <!-- PROSPECCIÓN -->
+  <div id="view-prospeccion" class="view">
+    <div id="prospeccion-wrap"><div class="loading">Cargando…</div></div>
+  </div>
+
   <!-- CAPTACIONES -->
   <div id="view-captaciones" class="view">
     <div id="captaciones-contenido">
-      <div id="prospeccion-wrap"></div>
       <div id="captaciones-agentes"><div class="loading">Cargando…</div></div>
     </div>
   </div>
@@ -265,6 +269,7 @@
   <div class="nav-item active" data-view="agenda" onclick="mostrar('agenda')"><span class="nav-icon">📅</span>Agenda</div>
   <div class="nav-item" data-view="clientes" onclick="mostrar('clientes')"><span class="nav-icon">👥</span>Clientes</div>
   <div class="nav-item" data-view="carga" onclick="mostrar('carga')"><span class="nav-icon">💬</span>Carga</div>
+  <div class="nav-item" data-view="prospeccion" onclick="mostrar('prospeccion')"><span class="nav-icon">🎯</span>Prospec.</div>
   <div class="nav-item" data-view="captaciones" onclick="mostrar('captaciones')"><span class="nav-icon">🏠</span>Captac.</div>
   <div class="nav-item" data-view="metas" onclick="mostrar('metas')"><span class="nav-icon">◈</span>Metas</div>
 </div>
@@ -334,6 +339,7 @@ function mostrar(v) {
   if (v === 'clientes') { if (cacheVistas.activos) renderizarActivos(cacheVistas.activos); cargarActivos(''); }
   if (v === 'carga') iniciarChat();
   if (v === 'captaciones') pintarCaptaciones();
+  if (v === 'prospeccion') { if (!_prospeccionYaCargadaHoy) { pintarProspeccionDelDia(); _prospeccionYaCargadaHoy = true; } }
   if (v === 'metas') { if (cacheVistas.metas) renderizarMetas(cacheVistas.metas); cargarMetas(); }
 }
 function cambiarBloqueCarga(b, evt) {
@@ -1539,7 +1545,6 @@ let _prospeccionYaCargadaHoy = false;
 function pintarCaptaciones() {
   // Caché-primero: si ya tenemos datos de antes, se ven al instante mientras se refresca atrás.
   if (cacheVistas.captacionesCrudo) renderizarCaptaciones(agruparCaptaciones(cacheVistas.captacionesCrudo));
-  if (!_prospeccionYaCargadaHoy) { pintarProspeccionDelDia(); _prospeccionYaCargadaHoy = true; }
   apiCall('getCaptacionesCrudo').then(function(items) {
     cacheVistas.captacionesCrudo = items;
     renderizarCaptaciones(agruparCaptaciones(items));
@@ -1594,15 +1599,75 @@ function renderizarCaptaciones(resumen) {
   });
   document.getElementById('captaciones-agentes').innerHTML = html;
 }
+const CHECKLIST_CAPTACION = [
+  { key: 'prospeccion', label: 'Prospección' },
+  { key: 'entrevista', label: 'Entrevista' },
+  { key: 'acm', label: 'ACM presentado' },
+  { key: 'publicada', label: 'Publicada' }
+];
 function captacionCardHtml(i) {
+  const completadas = i.etapasCompletadas || [];
   return `<div class="cap-item">
     <div class="dir">${i.direccion || '(sin dirección)'}</div>
     <div class="meta">${i.tipo || ''} ${i.lugar ? '· ' + i.lugar : ''} ${i.etapa ? '· ' + i.etapa : ''}</div>
     <div class="meta">Propietario: ${i.propietario || '-'} · Valor est.: ${i.valorEstimado || '-'}</div>
     <div class="meta">Autorización: ${i.autorizacion || '-'} · Escritura: ${i.escritura || '-'} · Impuestos: ${i.impuestos || '-'}</div>
     ${i.observacion ? `<div class="meta">${i.observacion}</div>` : ''}
-    ${(!i.publicada && !i.noPublicar) ? `<button class="btn-nopub" onclick="marcarNoPublicaClick(${i.fila})">No quiere publicar / Rechazó ACM</button>` : ''}
+    <div class="mes-filtro-row" style="margin-top:8px">
+      ${CHECKLIST_CAPTACION.map(e => `<span class="mes-chip ${completadas.includes(e.key)?'active':''}" onclick="toggleChecklistCaptacion(${i.fila},'${e.key}')">${completadas.includes(e.key)?'✓ ':''}${e.label}</span>`).join('')}
+    </div>
+    <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+      <button class="btn-nopub" style="border-color:var(--muted);color:var(--muted)" onclick="abrirEditarCaptacion(${i.fila})">✎ Editar</button>
+      ${(!i.publicada && !i.noPublicar) ? `<button class="btn-nopub" onclick="marcarNoPublicaClick(${i.fila})">No quiere publicar / Rechazó ACM</button>` : ''}
+      ${i.noPublicar ? `<button class="btn-nopub" style="border-color:var(--verde);color:var(--verde)" onclick="deshacerNoPublicaClick(${i.fila})">↩ Deshacer</button>` : ''}
+    </div>
   </div>`;
+}
+function toggleChecklistCaptacion(fila, key) {
+  apiCall('toggleEtapaCaptacionChecklist', { fila: fila, key: key }).then(function(res) {
+    // Actualiza en memoria y re-pinta, sin esperar un viaje redondo completo para que se sienta instantáneo.
+    const item = (cacheVistas.captacionesCrudo || []).find(x => x.fila === fila);
+    if (item) item.etapasCompletadas = res.etapasCompletadas;
+    renderizarCaptaciones(agruparCaptaciones(cacheVistas.captacionesCrudo));
+  }).catch(mostrarError);
+}
+function deshacerNoPublicaClick(fila) {
+  apiCall('deshacerNoPublicarCaptacion', { fila: fila }).then(pintarCaptaciones).catch(mostrarError);
+}
+function abrirEditarCaptacion(fila) {
+  const i = (cacheVistas.captacionesCrudo || []).find(x => x.fila === fila);
+  if (!i) return;
+  document.getElementById('modal-box').innerHTML = `
+    <div class="modal-title">Editar captación</div>
+    <label class="q">Dirección</label><input class="q" id="ed-DIRECCION" value="${(i.direccion||'').replace(/"/g,'&quot;')}">
+    <label class="q">Tipo</label><input class="q" id="ed-TIPO" value="${(i.tipo||'').replace(/"/g,'&quot;')}">
+    <label class="q">Lugar/Barrio</label><input class="q" id="ed-LUGAR" value="${(i.lugar||'').replace(/"/g,'&quot;')}">
+    <label class="q">Propietario</label><input class="q" id="ed-PROPIETARIO" value="${(i.propietario||'').replace(/"/g,'&quot;')}">
+    <label class="q">Valor estimado</label><input class="q" id="ed-VALOR_ESTIMADO" value="${(i.valorEstimado||'').replace(/"/g,'&quot;')}">
+    <label class="q">Autorización</label><input class="q" id="ed-AUTORIZACION" value="${(i.autorizacion||'').replace(/"/g,'&quot;')}">
+    <label class="q">Escritura</label><input class="q" id="ed-ESCRITURA" value="${(i.escritura||'').replace(/"/g,'&quot;')}">
+    <label class="q">Impuestos</label><input class="q" id="ed-IMPUESTOS" value="${(i.impuestos||'').replace(/"/g,'&quot;')}">
+    <label class="q">Observación</label><textarea class="q" id="ed-OBSERVACION" rows="2">${i.observacion||''}</textarea>
+    <button class="btn-continuar" onclick="guardarEditarCaptacion(${fila})">Guardar</button>
+    <div class="modal-cancelar" onclick="cerrarModal()">Cancelar</div>`;
+  document.getElementById('modal-overlay').classList.add('active');
+}
+function guardarEditarCaptacion(fila) {
+  if (_bloqueadoAhora()) return;
+  const datos = {
+    DIRECCION: document.getElementById('ed-DIRECCION').value.trim(),
+    TIPO: document.getElementById('ed-TIPO').value.trim(),
+    LUGAR: document.getElementById('ed-LUGAR').value.trim(),
+    PROPIETARIO: document.getElementById('ed-PROPIETARIO').value.trim(),
+    'VALOR ESTIMADO': document.getElementById('ed-VALOR_ESTIMADO').value.trim(),
+    AUTORIZACION: document.getElementById('ed-AUTORIZACION').value.trim(),
+    ESCRITURA: document.getElementById('ed-ESCRITURA').value.trim(),
+    IMPUESTOS: document.getElementById('ed-IMPUESTOS').value.trim(),
+    OBSERVACION: document.getElementById('ed-OBSERVACION').value.trim()
+  };
+  apiCall('actualizarCaptacion', { fila: fila, datos: datos }).then(function() {
+    cerrarModal(); pintarCaptaciones();
+  }).catch(mostrarError);
 }
 function toggleMesFiltro(m) {
   const idx = _mesesFiltroActivos.indexOf(m);
