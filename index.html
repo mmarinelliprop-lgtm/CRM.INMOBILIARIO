@@ -218,7 +218,7 @@
       <div id="grupos-activos"><div class="loading">Cargando…</div></div>
     </div>
     <div id="bloque-potenciales" style="display:none">
-      <div class="buscador-row"><input class="buscador" placeholder="Buscar por nombre..." oninput="cargarPotenciales()"></div>
+      <div class="buscador-row"><input class="buscador" placeholder="Buscar por nombre..." oninput="filtrarYRenderizarPotenciales()"></div>
       <div class="tags-filtro" id="tags-filtro"></div>
       <div id="lista-potenciales"><div class="loading">Cargando…</div></div>
     </div>
@@ -251,7 +251,10 @@
 
   <!-- CAPTACIONES -->
   <div id="view-captaciones" class="view">
-    <div id="captaciones-contenido"><div class="loading">Cargando…</div></div>
+    <div id="captaciones-contenido">
+      <div id="prospeccion-wrap"></div>
+      <div id="captaciones-agentes"><div class="loading">Cargando…</div></div>
+    </div>
   </div>
 
   <!-- METAS -->
@@ -491,10 +494,25 @@ function mostrarError(err) {
   setTimeout(() => { b.style.display = 'none'; }, 6000);
 }
 
-// ================= AGENDA =================
+// ================= AGENDA (todo desde el snapshot local de Calendar) =================
 let diaMostrado = new Date();
 let modoCal = 'dia';
 const HORAS = []; for (let h = 8; h <= 23; h++) HORAS.push(h);
+
+/** Trae TODO el Calendar de una vez. Se llama al iniciar la app, y de nuevo después de cualquier acción que escriba algo. */
+function refrescarSnapshot() {
+  return apiCall('getSnapshotCalendario').then(function(lista) { window._calSnapshot = lista; return lista; });
+}
+function refrescarSnapshotYVista() {
+  return refrescarSnapshot().then(function() { pintarVistaActual(); }).catch(mostrarError);
+}
+function _eventosEnRango(inicio, fin) {
+  if (!window._calSnapshot) return [];
+  return window._calSnapshot.filter(function(ev) {
+    const i = new Date(ev.inicioISO);
+    return i >= inicio && i < fin;
+  });
+}
 
 function pintarVistaActual() {
   if (modoCal === 'dia') pintarDia();
@@ -519,54 +537,51 @@ function pintarSemana() {
   const HORAS_SEMANA = []; for (let h = 8; h <= 20; h++) HORAS_SEMANA.push(h);
   const alturaHora = 38;
 
-  document.getElementById('semana-inner').innerHTML = '<div class="loading">Cargando semana…</div>';
-  apiCall('getEventosSemana', { fechaLunes: lunes.toISOString() }).then(function(porDiaKey) {
-    function claveDia(d) { const p = n => String(n).padStart(2,'0'); return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()); }
-    let html = `<div class="semana-hourcol"><div style="height:24px"></div>`;
-    HORAS_SEMANA.forEach(h => html += `<div class="semana-hourcell">${String(h).padStart(2,'0')}:00</div>`);
-    html += `</div>`;
-    dias.forEach((dia) => {
-      const eventos = (porDiaKey[claveDia(dia)] || []).filter(ev => {
-        const h = new Date(ev.inicioISO).getHours();
-        return h >= 8 && h <= 20;
-      });
-      let col = `<div class="semana-daycol">`;
-      col += `<div class="semana-dayhead ${mismoDia(dia, new Date()) ? 'hoy' : ''}" onclick="irADiaSemana('${dia.toISOString()}')">${dia.toLocaleDateString('es-AR',{weekday:'short'})} ${dia.getDate()}</div>`;
-      col += `<div class="semana-daybody" style="height:${HORAS_SEMANA.length*alturaHora}px">`;
-      HORAS_SEMANA.forEach(() => col += `<div class="semana-hourline"></div>`);
-      eventos.forEach(ev => {
-        const inicio = new Date(ev.inicioISO), fin = new Date(ev.finISO);
-        const inicioH = inicio.getHours() + inicio.getMinutes()/60, finH = fin.getHours() + fin.getMinutes()/60;
-        const top = (inicioH - 8) * alturaHora, height = Math.max((finH - inicioH) * alturaHora - 2, 16);
-        col += `<div class="semana-event ev-${ev.clase} ${ev.completada?'completada':''}" style="top:${top}px;height:${height}px" onclick="marcarHecho('${ev.id}')">${ev.completada?'✓ ':''}${ev.titulo}</div>`;
-      });
-      col += `</div></div>`;
-      html += col;
+  if (!window._calSnapshot) { document.getElementById('semana-inner').innerHTML = '<div class="loading">Cargando semana…</div>'; return; }
+  let html = `<div class="semana-hourcol"><div style="height:24px"></div>`;
+  HORAS_SEMANA.forEach(h => html += `<div class="semana-hourcell">${String(h).padStart(2,'0')}:00</div>`);
+  html += `</div>`;
+  dias.forEach((dia) => {
+    const finDia = new Date(dia); finDia.setDate(finDia.getDate() + 1);
+    const eventos = _eventosEnRango(dia, finDia).filter(ev => { const h = new Date(ev.inicioISO).getHours(); return h >= 8 && h <= 20; });
+    let col = `<div class="semana-daycol">`;
+    col += `<div class="semana-dayhead ${mismoDia(dia, new Date()) ? 'hoy' : ''}" onclick="irADiaSemana('${dia.toISOString()}')">${dia.toLocaleDateString('es-AR',{weekday:'short'})} ${dia.getDate()}</div>`;
+    col += `<div class="semana-daybody" style="height:${HORAS_SEMANA.length*alturaHora}px">`;
+    HORAS_SEMANA.forEach(() => col += `<div class="semana-hourline"></div>`);
+    eventos.forEach(ev => {
+      const inicio = new Date(ev.inicioISO), fin = new Date(ev.finISO);
+      const inicioH = inicio.getHours() + inicio.getMinutes()/60, finH = fin.getHours() + fin.getMinutes()/60;
+      const top = (inicioH - 8) * alturaHora, height = Math.max((finH - inicioH) * alturaHora - 2, 16);
+      col += `<div class="semana-event ev-${ev.clase} ${ev.completada?'completada':''}" style="top:${top}px;height:${height}px" onclick="marcarHecho('${ev.id}')">${ev.completada?'✓ ':''}${ev.titulo}</div>`;
     });
-    document.getElementById('semana-inner').innerHTML = html;
-  }).catch(mostrarError);
+    col += `</div></div>`;
+    html += col;
+  });
+  document.getElementById('semana-inner').innerHTML = html;
 }
 function irADiaSemana(iso) { diaMostrado = new Date(iso); cambiarModoCal('dia'); }
 
 // ---- MES ----
 function pintarMes() {
   const anio = diaMostrado.getFullYear(), mes = diaMostrado.getMonth();
-  apiCall('getResumenMes', { anio: anio, mes: mes }).then(function(porDia) {
-    const dow = ['L','M','M','J','V','S','D'];
-    let html = dow.map(d => `<div class="mes-dow">${d}</div>`).join('');
-    const primerDia = new Date(anio, mes, 1);
-    const offset = (primerDia.getDay() + 6) % 7;
-    const diasEnMes = new Date(anio, mes + 1, 0).getDate();
-    for (let i = 0; i < offset; i++) html += `<div class="mes-cell" style="visibility:hidden"></div>`;
-    for (let d = 1; d <= diasEnMes; d++) {
-      const fecha = new Date(anio, mes, d);
-      const esHoy = mismoDia(fecha, new Date());
-      const clases = (porDia[d] || []).slice(0, 4);
-      const dots = clases.map(c => `<div class="mes-dot ev-${c}"></div>`).join('');
-      html += `<div class="mes-cell ${esHoy?'hoy':''}" onclick="irADiaMes(${anio},${mes},${d})">${d}<div class="mes-dots">${dots}</div></div>`;
-    }
-    document.getElementById('mes-grid').innerHTML = html;
-  }).catch(mostrarError);
+  if (!window._calSnapshot) { document.getElementById('mes-grid').innerHTML = '<div class="loading">Cargando…</div>'; return; }
+  const inicioMes = new Date(anio, mes, 1), finMes = new Date(anio, mes + 1, 1);
+  const eventosMes = _eventosEnRango(inicioMes, finMes);
+  const porDia = {};
+  eventosMes.forEach(ev => { const d = new Date(ev.inicioISO).getDate(); porDia[d] = porDia[d] || []; porDia[d].push(ev.clase); });
+  const dow = ['L','M','M','J','V','S','D'];
+  let html = dow.map(d => `<div class="mes-dow">${d}</div>`).join('');
+  const offset = (inicioMes.getDay() + 6) % 7;
+  const diasEnMes = new Date(anio, mes + 1, 0).getDate();
+  for (let i = 0; i < offset; i++) html += `<div class="mes-cell" style="visibility:hidden"></div>`;
+  for (let d = 1; d <= diasEnMes; d++) {
+    const fecha = new Date(anio, mes, d);
+    const esHoy = mismoDia(fecha, new Date());
+    const clases = (porDia[d] || []).slice(0, 4);
+    const dots = clases.map(c => `<div class="mes-dot ev-${c}"></div>`).join('');
+    html += `<div class="mes-cell ${esHoy?'hoy':''}" onclick="irADiaMes(${anio},${mes},${d})">${d}<div class="mes-dots">${dots}</div></div>`;
+  }
+  document.getElementById('mes-grid').innerHTML = html;
 }
 function irADiaMes(anio, mes, d) { diaMostrado = new Date(anio, mes, d); cambiarModoCal('dia'); }
 function navegar(delta, el) {
@@ -578,10 +593,29 @@ function pintarDia() {
   document.getElementById('cal-day-lbl').innerText = diaMostrado.toLocaleDateString('es-AR', { weekday: 'short' }).toUpperCase();
   document.getElementById('cal-num-lbl').innerText = diaMostrado.getDate();
   document.getElementById('cal-mes-lbl').innerText = diaMostrado.toLocaleDateString('es-AR', { month: 'long' });
-  if (!cacheVistas.agenda) document.getElementById('cal-grid').innerHTML = '<div class="loading">Cargando…</div>';
-  apiCall('getEventosDia', { fecha: diaMostrado.toISOString() })
-    .then(function(eventos) { cacheVistas.agenda = eventos; renderizarDia(eventos); })
-    .catch(mostrarError);
+  if (!window._calSnapshot) { document.getElementById('cal-grid').innerHTML = '<div class="loading">Cargando…</div>'; return; }
+  const inicio = new Date(diaMostrado); inicio.setHours(0,0,0,0);
+  const fin = new Date(diaMostrado); fin.setHours(23,59,59,999);
+  renderizarDia(_eventosEnRango(inicio, fin));
+}
+/** Propone 3 horarios evitando choques, usando el snapshot local (no le pide nada al servidor). */
+function proponerHorariosLocal(fechaMinISO) {
+  const fechaMin = fechaMinISO ? new Date(fechaMinISO) : new Date();
+  const candidatos = [];
+  const base1 = new Date(fechaMin); base1.setDate(base1.getDate() + 1); base1.setHours(10, 0, 0, 0);
+  const base2 = new Date(fechaMin); base2.setDate(base2.getDate() + 1); base2.setHours(15, 0, 0, 0);
+  const base3 = new Date(fechaMin); base3.setDate(base3.getDate() + 2); base3.setHours(9, 0, 0, 0);
+  const snapshot = window._calSnapshot || [];
+  [base1, base2, base3].forEach(function(candidato) {
+    const finCandidato = new Date(candidato.getTime() + 30 * 60000);
+    const choca = snapshot.some(ev => {
+      const i = new Date(ev.inicioISO), f = new Date(ev.finISO);
+      return candidato < f && finCandidato > i;
+    });
+    const final = choca ? new Date(candidato.getTime() + 60 * 60000) : candidato;
+    candidatos.push(final.toISOString());
+  });
+  return candidatos;
 }
 function renderizarDia(eventos) {
   let filas = '';
@@ -632,7 +666,7 @@ function renderizarDia(eventos) {
     const anchoPct = 100 / ev._cols;
     const leftPct = anchoPct * ev._col;
     const compacto = ev._height < 34 ? 'compacto' : '';
-    const horaTxt = ev.hora;
+    const horaTxt = ev._inicio.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
     const subTxt = [ev.cliente, ev.ubicacion].filter(Boolean).join(' · ');
     const contenido = compacto
       ? `${ev.completada ? '✓ ' : ''}${horaTxt} · ${ev.titulo}${subTxt ? ' · ' + subTxt : ''}`
@@ -689,7 +723,7 @@ function guardarTareaManual() {
   if (!titulo || !fecha) { alert('Falta el título o el horario.'); return; }
   if ((categoria === 'muestra' || categoria === 'oficina') && !window._personaElegida) { alert('Elegí primero quién la hace.'); return; }
   apiCall('crearTareaManual', { titulo: titulo, nota: nota, fecha: new Date(fecha).toISOString(), duracion: duracion, categoria: categoria, persona: window._personaElegida, ubicacion: ubicacion })
-    .then(() => { cerrarModal(); pintarVistaActual(); }).catch(mostrarError);
+    .then(() => { cerrarModal(); refrescarSnapshotYVista(); }).catch(mostrarError);
 }
 
 // ---- Quiz de preferencias ----
@@ -733,7 +767,7 @@ function marcarHecho(id) {
 }
 function manejarResultado(r) {
   if (r.tipo === 'ya_completada') { abrirDeshacer(); return; }
-  if (r.tipo === 'completada_simple' || r.tipo === 'terminal' || r.tipo === 'ok_simple') { pintarVistaActual(); return; }
+  if (r.tipo === 'completada_simple' || r.tipo === 'terminal' || r.tipo === 'ok_simple') { refrescarSnapshotYVista(); return; }
   if (r.tipo === 'links') { abrirPasoLinks(); return; }
   if (r.tipo === 'horario') { abrirPropuestaHorario(r); return; }
   if (r.tipo === 'horario_acm') { abrirPropuestaHorarioACM(r.fechaMin, r.personaSugerida); return; }
@@ -752,7 +786,7 @@ function abrirDeshacer() {
 }
 function confirmarDeshacer() {
   if (_bloqueadoAhora()) return;
-  apiCall('deshacerTarea', { eventId: eventoActivoId }).then(() => { cerrarModal(); pintarVistaActual(); }).catch(mostrarError);
+  apiCall('deshacerTarea', { eventId: eventoActivoId }).then(() => { cerrarModal(); refrescarSnapshotYVista(); }).catch(mostrarError);
 }
 
 function abrirConfirmarSimple(titulo) {
@@ -840,7 +874,7 @@ function continuarVincularHorario(indiceOpcion) {
   const opcion = window._opcionesEtapaTmp[indiceOpcion];
   window._vincTmp.tipoTarea = opcion.tipoTarea;
   window._vincTmp.pasoIndex = opcion.pasoIndex;
-  apiCall('proponerHorarios', {}).then(function(slots) {
+  Promise.resolve(proponerHorariosLocal(null)).then(function(slots) {
     const etapa = window._vincTmp.etapa;
     const necesitaPersona = etapa === 'Muestra' || ['Contacto nuevo','Prelisting','Presentación de ACM','Publicación','Esperando info','Búsqueda permuta','Búsqueda activa'].includes(etapa);
     document.getElementById('modal-box').innerHTML = `
@@ -877,7 +911,7 @@ function confirmarVincularFinal(fechaISO) {
 }
 function confirmarSimpleSi() {
   cerrarModal();
-  apiCall('confirmarMarcarHechoSimple', { eventId: eventoActivoId }).then(() => pintarVistaActual()).catch(mostrarError);
+  apiCall('confirmarMarcarHechoSimple', { eventId: eventoActivoId }).then(() => refrescarSnapshotYVista()).catch(mostrarError);
 }
 
 function abrirPasoLinks() {
@@ -902,7 +936,7 @@ function confirmarLinks() {
 }
 
 function abrirPropuestaHorario(r) {
-  apiCall('proponerHorarios', { fechaMin: null }).then(function(slots) {
+  Promise.resolve(proponerHorariosLocal(null)).then(function(slots) {
     document.getElementById('modal-box').innerHTML = `
       <div class="modal-title">¿Cuándo agendamos esto?</div>
       <div class="modal-sub">Próxima tarea: "${r.etiqueta}"</div>
@@ -943,16 +977,16 @@ function confirmarHorarioElegido(fechaISO, r) {
   cerrarModal();
   const persona = window._personaElegida;
   if (r.etapaSiguiente) {
-    apiCall('confirmarHorarioNuevaEtapa', { eventId: eventoActivoId, fecha: fechaISO, etapaSiguiente: r.etapaSiguiente, persona: persona }).then(() => pintarVistaActual()).catch(mostrarError);
+    apiCall('confirmarHorarioNuevaEtapa', { eventId: eventoActivoId, fecha: fechaISO, etapaSiguiente: r.etapaSiguiente, persona: persona }).then(() => refrescarSnapshotYVista()).catch(mostrarError);
   } else if (r.esOferta) {
-    apiCall('confirmarHorarioOferta', { eventId: eventoActivoId, fecha: fechaISO, etiqueta: r.etiqueta }).then(() => pintarVistaActual()).catch(mostrarError);
+    apiCall('confirmarHorarioOferta', { eventId: eventoActivoId, fecha: fechaISO, etiqueta: r.etiqueta }).then(() => refrescarSnapshotYVista()).catch(mostrarError);
   } else {
-    apiCall('confirmarHorarioSiguiente', { eventId: eventoActivoId, fecha: fechaISO, esVerificacion: !!r.esVerificacion, persona: persona }).then(() => pintarVistaActual()).catch(mostrarError);
+    apiCall('confirmarHorarioSiguiente', { eventId: eventoActivoId, fecha: fechaISO, esVerificacion: !!r.esVerificacion, persona: persona }).then(() => refrescarSnapshotYVista()).catch(mostrarError);
   }
 }
 
 function abrirPropuestaHorarioACM(fechaMinISO, personaSugerida) {
-  apiCall('proponerHorarios', { fechaMin: fechaMinISO }).then(function(slots) {
+  Promise.resolve(proponerHorariosLocal(fechaMinISO)).then(function(slots) {
     document.getElementById('modal-box').innerHTML = `
       <div class="modal-title">¿Cuándo presentás el ACM?</div>
       <div class="modal-sub">No antes de ${new Date(fechaMinISO).toLocaleDateString('es-AR')} (72hs hábiles desde la visita). "Hacer ACM" se agenda sola, un día hábil antes.</div>
@@ -982,12 +1016,12 @@ function confirmarACM(fechaISO) {
   cerrarModal();
   apiCall('confirmarPresentarACM', { eventId: eventoActivoId, fecha: fechaISO, persona: window._personaElegida }).then(function(res) {
     alert('Coordinado: "Presentar ACM" agendado, y "Hacer ACM" quedó agendada sola para el ' + new Date(res.fechaHacerACMISO).toLocaleDateString('es-AR') + '.');
-    pintarVistaActual();
+    refrescarSnapshotYVista();
   }).catch(mostrarError);
 }
 
 function abrirPropuestaHorarioReserva(r) {
-  apiCall('proponerHorarios', { fechaMin: null }).then(function(slots) {
+  Promise.resolve(proponerHorariosLocal(null)).then(function(slots) {
     document.getElementById('modal-box').innerHTML = `
       <div class="modal-title">¿Cuándo es la reunión de reserva?</div>
       <div class="modal-sub">"Armar la reserva" se agenda sola, un día antes.</div>
@@ -1018,7 +1052,7 @@ function confirmarReserva(fechaISO, r) {
   const cliente = r.cliente || null, sheet = r.sheet || null, fila = r.fila || null;
   apiCall('confirmarReunionReserva', { eventId: cliente ? null : eventoActivoId, fecha: fechaISO, cliente: cliente, sheet: sheet, fila: fila, persona: window._personaElegida }).then(function(res) {
     alert('Coordinado: "Reunión de reserva" agendada, y "Armar la reserva" quedó agendada sola para el ' + new Date(res.fechaArmarISO).toLocaleDateString('es-AR') + '.');
-    pintarVistaActual();
+    refrescarSnapshotYVista();
   }).catch(mostrarError);
 }
 
@@ -1056,7 +1090,26 @@ function cambiarBloqueClientes(b, evt) {
   if (b === 'potenciales') cargarPotenciales();
 }
 function cargarActivos(filtro) {
-  apiCall('getClientesActivos', { filtro: filtro || '' }).then(function(clientes) { cacheVistas.activos = clientes; renderizarActivos(clientes); }).catch(mostrarError);
+  apiCall('getClientesActivos', { filtro: filtro || '' }).then(function(clientes) {
+    _cruzarConSnapshot(clientes);
+    cacheVistas.activos = clientes;
+    renderizarActivos(clientes);
+  }).catch(mostrarError);
+}
+/** Le agrega proximaTarea/proximaFechaISO a cada cliente cruzando contra window._calSnapshot (sin pedirle nada a Calendar). */
+function _cruzarConSnapshot(clientes) {
+  const snapshot = window._calSnapshot || [];
+  clientes.forEach(function(c) {
+    const evs = snapshot.filter(ev => ev.sheet === c.sheet && ev.fila === c.fila && !ev.completada)
+      .sort((a, b) => new Date(a.inicioISO) - new Date(b.inicioISO));
+    if (evs.length) { c.proximaTarea = evs[0].titulo; c.proximaFechaISO = evs[0].inicioISO; }
+    else { c.proximaTarea = '(sin tarea agendada)'; c.proximaFechaISO = null; }
+  });
+  clientes.sort(function(a, b) {
+    if (!a.proximaFechaISO) return 1;
+    if (!b.proximaFechaISO) return -1;
+    return new Date(a.proximaFechaISO) - new Date(b.proximaFechaISO);
+  });
 }
 const ORDEN_ETAPAS = ['Contacto nuevo','Prelisting','Presentación de ACM','Publicación','Esperando info','Búsqueda permuta','Búsqueda activa','Muestra','Reserva','Cierre'];
 const COLOR_ETAPA = {
@@ -1162,7 +1215,7 @@ function mostrarTareaPersonalizada(sheet, fila, etapa, nombre) {
 function continuarTareaPersonalizada(sheet, fila, etapa) {
   const titulo = document.getElementById('pers-titulo').value.trim();
   if (!titulo) { alert('Escribí qué hay que hacer.'); return; }
-  apiCall('proponerHorarios', {}).then(function(slots) {
+  Promise.resolve(proponerHorariosLocal(null)).then(function(slots) {
     document.getElementById('modal-box').innerHTML = `
       <div class="modal-title">¿Cuándo?</div>
       <div class="modal-sub">${titulo}</div>
@@ -1186,12 +1239,12 @@ function confirmarTareaPersonalizadaManual(sheet, fila, etapa, titulo) {
 function confirmarTareaPersonalizada(sheet, fila, etapa, titulo, fechaISO) {
   if (_bloqueadoAhora()) return;
   apiCall('agendarTareaPersonalizada', { sheet: sheet, fila: fila, etapa: etapa, titulo: titulo, fecha: fechaISO, persona: window._personaElegida })
-    .then(function() { cerrarModal(); alert('Tarea agendada.'); pintarVistaActual(); cargarActivos(''); }).catch(mostrarError);
+    .then(function() { cerrarModal(); alert('Tarea agendada.'); refrescarSnapshotYVista(); cargarActivos(''); }).catch(mostrarError);
 }
 function continuarAgendarEtapa(sheet, fila, etapa, indiceOpcion) {
   const opcion = window._opcionesEtapaTmp[indiceOpcion];
   const tipoTarea = opcion.tipoTarea, pasoIndex = opcion.pasoIndex;
-  apiCall('proponerHorarios', {}).then(function(slots) {
+  Promise.resolve(proponerHorariosLocal(null)).then(function(slots) {
     const necesitaPersona = etapa === 'Muestra' || ['Contacto nuevo','Prelisting','Presentación de ACM','Publicación','Esperando info','Búsqueda permuta','Búsqueda activa'].includes(etapa);
     document.getElementById('modal-box').innerHTML = `
       <div class="modal-title">¿Cuándo?</div>
@@ -1216,7 +1269,7 @@ function confirmarAgendarEtapaManual(sheet, fila, etapa, tipoTarea, pasoIndex) {
 function confirmarAgendarEtapa(sheet, fila, etapa, tipoTarea, pasoIndex, fechaISO) {
   if (_bloqueadoAhora()) return;
   apiCall('agendarTareaEtapa', { sheet: sheet, fila: fila, etapa: etapa, tipoTarea: tipoTarea, pasoIndex: pasoIndex, fecha: fechaISO, persona: window._personaElegida })
-    .then(function() { cerrarModal(); alert('Tarea agendada y etapa actualizada.'); pintarVistaActual(); cargarActivos(''); })
+    .then(function() { cerrarModal(); alert('Tarea agendada y etapa actualizada.'); refrescarSnapshotYVista(); cargarActivos(''); })
     .catch(mostrarError);
 }
 
@@ -1256,7 +1309,7 @@ function confirmarAgendarLibre(sheet, fila, nombre) {
   if (!desc || !fecha) { alert('Falta la descripción o el horario.'); return; }
   if ((categoria === 'muestra' || categoria === 'oficina') && !window._personaElegida) { alert('Elegí quién la hace.'); return; }
   apiCall('crearTareaManual', { descripcion: desc + ' - ' + nombre, cliente: nombre, fecha: new Date(fecha).toISOString(), categoria: categoria, persona: window._personaElegida, sheet: sheet, fila: fila })
-    .then(function() { cerrarModal(); alert('Tarea agendada.'); pintarVistaActual(); })
+    .then(function() { cerrarModal(); alert('Tarea agendada.'); refrescarSnapshotYVista(); })
     .catch(mostrarError);
 }
 function agregarEtiquetaClick(sheet, fila) {
@@ -1281,23 +1334,42 @@ let tagsActivos = [];
 function pintarTagsFiltro() {
   document.getElementById('tags-filtro').innerHTML = TAGS_DISPONIBLES.map(t => `<div class="tag-filtro ${tagsActivos.includes(t)?'active':''}" onclick="toggleTag('${t}')">${t}</div>`).join('');
 }
-function toggleTag(t) { tagsActivos = tagsActivos.includes(t) ? tagsActivos.filter(x=>x!==t) : tagsActivos.concat(t); pintarTagsFiltro(); cargarPotenciales(); }
+function toggleTag(t) { tagsActivos = tagsActivos.includes(t) ? tagsActivos.filter(x=>x!==t) : tagsActivos.concat(t); pintarTagsFiltro(); filtrarYRenderizarPotenciales(); }
 function cargarPotenciales() {
-  const q = document.querySelector('#bloque-potenciales .buscador').value;
-  apiCall('getPotenciales', { filtro: q, tags: tagsActivos }).then(function(lista) {
-    cacheVistas.potenciales = lista;
-    document.getElementById('lista-potenciales').innerHTML = lista.map(p => `
-      <div class="potencial-card" onclick="abrirPerfil('${p.sheet}', ${p.fila})">
-        <div class="cliente-nombre">${p.nombre}</div><div class="cliente-tarea">${p.telefono}</div>
-        <div style="margin-top:8px">${p.inversor?'<span class="ptag">💰 Inversor</span>':''}${p.reciclaje?'<span class="ptag">♻️ Recicla</span>':''}${p.tipoPropiedad?'<span class="ptag">'+p.tipoPropiedad+'</span>':''}</div>
-        <div style="margin-top:10px"><button class="btn-chico" style="background:var(--verde);color:#062b23" onclick="event.stopPropagation();reactivarClick('${p.sheet}',${p.fila})">Reactivar a Activos</button></div>
-      </div>`).join('') || '<div class="loading">Sin resultados.</div>';
+  // Caché-primero: si ya tenemos los datos, se filtran al instante mientras se refresca atrás.
+  if (cacheVistas.potencialesCrudo) filtrarYRenderizarPotenciales();
+  apiCall('getPotencialesCrudo').then(function(lista) {
+    cacheVistas.potencialesCrudo = lista;
+    filtrarYRenderizarPotenciales();
   }).catch(mostrarError);
+}
+/** Filtra por texto + tags en el navegador (sin pedirle nada al servidor) — se llama en cada letra que se escribe. */
+function filtrarYRenderizarPotenciales() {
+  if (!cacheVistas.potencialesCrudo) { document.getElementById('lista-potenciales').innerHTML = '<div class="loading">Cargando…</div>'; return; }
+  const q = (document.querySelector('#bloque-potenciales .buscador').value || '').toLowerCase();
+  let lista = cacheVistas.potencialesCrudo;
+  if (q) lista = lista.filter(p => p.nombre.toLowerCase().indexOf(q) !== -1);
+  if (tagsActivos.length) {
+    lista = lista.filter(p => tagsActivos.every(t => {
+      if (t === 'Inversor') return p.inversor;
+      if (t === 'Recicla') return p.reciclaje;
+      return (p.tipoPropiedad || '').indexOf(t) !== -1;
+    }));
+  }
+  document.getElementById('lista-potenciales').innerHTML = lista.map(p => `
+    <div class="potencial-card" onclick="abrirPerfil('${p.sheet}', ${p.fila})">
+      <div class="cliente-nombre">${p.nombre}</div><div class="cliente-tarea">${p.telefono}</div>
+      <div style="margin-top:8px">${p.inversor?'<span class="ptag">💰 Inversor</span>':''}${p.reciclaje?'<span class="ptag">♻️ Recicla</span>':''}${p.tipoPropiedad?'<span class="ptag">'+p.tipoPropiedad+'</span>':''}</div>
+      <div style="margin-top:10px"><button class="btn-chico" style="background:var(--verde);color:#062b23" onclick="event.stopPropagation();reactivarClick('${p.sheet}',${p.fila})">Reactivar a Activos</button></div>
+    </div>`).join('') || '<div class="loading">Sin resultados.</div>';
 }
 function reactivarClick(sheet, fila) {
   const etapa = prompt('¿En qué etapa entra? (ej: Contacto nuevo)');
   if (!etapa) return;
-  apiCall('reactivarAActivos', { sheet: sheet, fila: fila, etapa: etapa }).then(() => { cargarPotenciales(); alert('Reactivado.'); }).catch(mostrarError);
+  apiCall('reactivarAActivos', { sheet: sheet, fila: fila, etapa: etapa }).then(() => {
+    cacheVistas.potencialesCrudo = null; // se movió a Activos: refrescar la próxima vez
+    cargarPotenciales(); alert('Reactivado.');
+  }).catch(mostrarError);
 }
 
 // ================= CARGA (chat con IA) =================
@@ -1463,13 +1535,39 @@ function cargarMetas() {
 
 // ================= CAPTACIONES =================
 let _mesesFiltroActivos = [];
+let _prospeccionYaCargadaHoy = false;
 function pintarCaptaciones() {
-  document.getElementById('captaciones-contenido').innerHTML = '<div class="loading">Cargando…</div>';
-  apiCall('getCaptacionesAgrupadas').then(function(resumen) {
-    cacheVistas.captaciones = resumen;
-    renderizarCaptaciones(resumen);
-    pintarProspeccionDelDia();
+  // Caché-primero: si ya tenemos datos de antes, se ven al instante mientras se refresca atrás.
+  if (cacheVistas.captacionesCrudo) renderizarCaptaciones(agruparCaptaciones(cacheVistas.captacionesCrudo));
+  if (!_prospeccionYaCargadaHoy) { pintarProspeccionDelDia(); _prospeccionYaCargadaHoy = true; }
+  apiCall('getCaptacionesCrudo').then(function(items) {
+    cacheVistas.captacionesCrudo = items;
+    renderizarCaptaciones(agruparCaptaciones(items));
   }).catch(mostrarError);
+}
+/** Agrupa por asesor y calcula efectividad/publicada — todo esto corre en el navegador, no en Apps Script. */
+function agruparCaptaciones(items) {
+  const agrupado = {};
+  items.forEach(function(r) {
+    const asesor = r.agente || 'Sin asignar';
+    agrupado[asesor] = agrupado[asesor] || [];
+    const noPublicar = r.estadoRaw === 'NO_PUBLICAR';
+    const publicada = r.etapa === 'Publicación' || r.etapa === 'Cierre' || r.etapa === 'Ganado';
+    agrupado[asesor].push(Object.assign({}, r, {
+      estado: noPublicar ? 'No quiere publicar / Rechazó ACM' : r.estadoRaw,
+      publicada: publicada, noPublicar: noPublicar,
+      mesPublicacion: (publicada && r.fechaUltimoCambioISO) ? (new Date(r.fechaUltimoCambioISO).getMonth() + 1) : null
+    }));
+  });
+  const resumen = {};
+  Object.keys(agrupado).forEach(function(asesor) {
+    const its = agrupado[asesor];
+    const publicadas = its.filter(i => i.publicada).length;
+    const noPublicar = its.filter(i => i.noPublicar).length;
+    const totalIntentos = publicadas + noPublicar;
+    resumen[asesor] = { publicadas: publicadas, noPublicar: noPublicar, efectividad: totalIntentos ? Math.round((publicadas / totalIntentos) * 100) : 0, items: its };
+  });
+  return resumen;
 }
 function renderizarCaptaciones(resumen) {
   const MESES = ['','Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
@@ -1480,7 +1578,6 @@ function renderizarCaptaciones(resumen) {
       <span class="mes-chip" onclick="filtroMesTodos(false)">Ninguno</span>
       ${MESES.slice(1).map((m,i) => `<span class="mes-chip ${_mesesFiltroActivos.includes(i+1)?'active':''}" onclick="toggleMesFiltro(${i+1})">${m}</span>`).join('')}
     </div></div>`;
-  html += `<div id="prospeccion-wrap"></div>`;
   Object.keys(resumen).forEach(function(asesor) {
     const r = resumen[asesor];
     const vaBien = r.efectividad >= 50;
@@ -1495,7 +1592,7 @@ function renderizarCaptaciones(resumen) {
       <div style="display:none">${publicadas.map(i => captacionCardHtml(i)).join('') || '<div class="loading">Sin publicadas en estos meses.</div>'}</div>
     </div>`;
   });
-  document.getElementById('captaciones-contenido').innerHTML = html;
+  document.getElementById('captaciones-agentes').innerHTML = html;
 }
 function captacionCardHtml(i) {
   return `<div class="cap-item">
@@ -1510,11 +1607,11 @@ function captacionCardHtml(i) {
 function toggleMesFiltro(m) {
   const idx = _mesesFiltroActivos.indexOf(m);
   if (idx === -1) _mesesFiltroActivos.push(m); else _mesesFiltroActivos.splice(idx, 1);
-  renderizarCaptaciones(cacheVistas.captaciones);
+  renderizarCaptaciones(agruparCaptaciones(cacheVistas.captacionesCrudo)); // solo re-pinta las tarjetas, prospección queda intacta
 }
 function filtroMesTodos(todos) {
   _mesesFiltroActivos = todos ? Array.from({length:12}, (_,i)=>i+1) : [];
-  renderizarCaptaciones(cacheVistas.captaciones);
+  renderizarCaptaciones(agruparCaptaciones(cacheVistas.captacionesCrudo));
 }
 function marcarNoPublicaClick(fila) {
   if (!confirm('¿Marcar como "No quiere publicar / Rechazó ACM"? Se cuenta para tu efectividad.')) return;
@@ -1574,7 +1671,9 @@ function pintarFraseMotivacional() {
 
 // ================= AVISO: CONTACTOS SIN TAREA =================
 function chequearSinTarea() {
-  apiCall('getClientesSinTarea').then(function(lista) {
+  apiCall('getClientesActivos', { filtro: '' }).then(function(clientes) {
+    _cruzarConSnapshot(clientes);
+    const lista = clientes.filter(c => !c.proximaFechaISO);
     if (!lista.length) return;
     const b = document.getElementById('banner-sin-tarea');
     b.style.display = 'flex';
@@ -1603,8 +1702,7 @@ function pasarAPotencialClick(sheet, fila) {
 // ================= INIT =================
 pintarHeaderBtns('agenda');
 pintarFraseMotivacional();
-chequearSinTarea();
-pintarDia();
+refrescarSnapshot().then(() => { pintarVistaActual(); chequearSinTarea(); }).catch(mostrarError);
 pintarTagsFiltro();
 </script>
 
