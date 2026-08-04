@@ -1684,24 +1684,42 @@ function marcarNoPublicaClick(fila) {
 }
 
 // ---- Prospección diaria ----
+let _prospeccionLista = [];
 function pintarProspeccionDelDia() {
   apiCall('getProspeccionDelDia').then(function(lista) {
+    _prospeccionLista = lista;
     const html = `<div class="card-title" style="margin:14px 0 8px">PROSPECCIÓN DE HOY</div>` +
       lista.map((p, i) => `<div class="prospeccion-card" id="prosp-${i}">
         <div class="nombre">${p.nombre}</div>
-        <div class="loading" style="padding:6px 0">Pensando cómo abordarlo…</div>
+        <div id="prosp-ia-${i}">
+          <button class="btn-chico" style="background:var(--card-2);color:var(--text);border:1px solid var(--line)" onclick="activarAnalisisIA(${i})">🤖 Analizar con IA</button>
+        </div>
         <button class="btn-chico" style="background:var(--verde);color:#062b23;margin-top:8px" onclick="marcarProspectadoClick('${p.sheet}',${p.fila},${i})">✓ Prospectado hoy</button>
       </div>`).join('');
-    document.getElementById('prospeccion-wrap').innerHTML = html || '';
-    lista.forEach((p, i) => {
-      apiCall('getSugerenciaProspeccionIA', { nombre: p.nombre, datos: { tipoPropiedad: p.tipoPropiedad, inversor: p.inversor, reciclaje: p.reciclaje } }).then(function(s) {
-        const el = document.getElementById('prosp-' + i);
-        if (!el || s.error) return;
-        const loadingDiv = el.querySelector('.loading');
-        if (loadingDiv) loadingDiv.outerHTML = `<div class="idea">💡 ${s.idea || ''}</div>${(s.preguntas||[]).map(q => `<div class="pregunta">• ${q}</div>`).join('')}`;
-      }).catch(() => {});
-    });
+    document.getElementById('prospeccion-wrap').innerHTML = html || '<div class="loading">Sin potenciales para hoy.</div>';
   }).catch(mostrarError);
+}
+function activarAnalisisIA(i) {
+  const p = _prospeccionLista[i];
+  document.getElementById('prosp-ia-' + i).innerHTML = '<div class="loading">Pensando qué preguntarte…</div>';
+  apiCall('getPreguntasProspeccionIA', { nombre: p.nombre, datos: { tipoPropiedad: p.tipoPropiedad, inversor: p.inversor, reciclaje: p.reciclaje } }).then(function(res) {
+    if (res.error || !res.preguntas || !res.preguntas.length) { document.getElementById('prosp-ia-' + i).innerHTML = '<div class="loading">No se pudo analizar. Probá de nuevo.</div>'; return; }
+    window._prospPreguntas = window._prospPreguntas || {};
+    window._prospPreguntas[i] = res.preguntas;
+    document.getElementById('prosp-ia-' + i).innerHTML = res.preguntas.map((q, qi) => `
+      <label class="q" style="margin-top:8px">${q}</label><input class="q" id="prosp-resp-${i}-${qi}" style="margin-bottom:4px">`).join('') +
+      `<button class="btn-chico" style="background:var(--verde);color:#062b23;margin-top:4px" onclick="generarIdeaProspeccion(${i})">Generar idea de abordaje</button>`;
+  }).catch(mostrarError);
+}
+function generarIdeaProspeccion(i) {
+  const p = _prospeccionLista[i];
+  const preguntas = (window._prospPreguntas || {})[i] || [];
+  const respuestas = preguntas.map((_, qi) => (document.getElementById('prosp-resp-' + i + '-' + qi) || {}).value || '');
+  document.getElementById('prosp-ia-' + i).innerHTML = '<div class="loading">Armando la idea…</div>';
+  apiCall('getIdeaProspeccionIA', { nombre: p.nombre, datos: { tipoPropiedad: p.tipoPropiedad, inversor: p.inversor, reciclaje: p.reciclaje }, preguntas: preguntas, respuestas: respuestas })
+    .then(function(res) {
+      document.getElementById('prosp-ia-' + i).innerHTML = res.error ? '<div class="loading">No se pudo generar la idea.</div>' : `<div class="idea">💡 ${res.idea || ''}</div>`;
+    }).catch(mostrarError);
 }
 function marcarProspectadoClick(sheet, fila, idx) {
   if (_bloqueadoAhora()) return;
