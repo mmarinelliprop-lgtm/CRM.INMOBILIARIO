@@ -338,19 +338,29 @@ function cambiarBloqueCarga(b, evt) {
   evt.target.classList.add('active');
   document.getElementById('bloque-carga-chat').style.display = b === 'chat' ? 'block' : 'none';
   document.getElementById('bloque-carga-form').style.display = b === 'form' ? 'block' : 'none';
-  if (b === 'form') pintarTablaConsultas();
+  if (b === 'form' && !_tablaConsultasData) mostrarBotonCargarTabla();
+}
+function mostrarBotonCargarTabla() {
+  document.getElementById('tabla-consultas-wrap').innerHTML = `
+    <button class="btn-continuar" onclick="pintarTablaConsultas()">📋 Ver tabla completa (puede tardar unos segundos)</button>
+    <div class="loading">Para cargas rápidas, usá "✨ Cargar con IA" arriba — no hace falta abrir la tabla.</div>`;
+  document.getElementById('tabla-filtros').innerHTML = '';
 }
 
 // ---- Tabla en vivo de Consultas Redes (con filtros por columna, como Excel) ----
 let _tablaConsultasData = null;
 let _filtrosColumna = {}; // { columna: Set(valoresSeleccionados) }
 function pintarTablaConsultas() {
+  document.getElementById('tabla-consultas-wrap').innerHTML = '<div class="loading">Cargando tabla…</div>';
   apiCall('getConsultasRedesTabla').then(function(data) {
     _tablaConsultasData = data;
     _filtrosColumna = {};
     data.headers.forEach(h => { _filtrosColumna[h] = null; }); // null = sin filtrar (todos)
     renderizarFiltrosTabla();
     renderizarTablaConsultas();
+    if (data.totalReal > data.mostrando) {
+      document.getElementById('tabla-consultas-wrap').insertAdjacentHTML('afterbegin', `<div class="loading" style="margin-bottom:8px">Mostrando las últimas ${data.mostrando} de ${data.totalReal} filas (para que ande rápido). Usá el buscador de Clientes para encontrar algo más viejo.</div>`);
+    }
   }).catch(mostrarError);
 }
 function renderizarFiltrosTabla() {
