@@ -168,6 +168,12 @@
   .prospeccion-card .idea { font-size:11.5px; color:var(--naranja); margin:6px 0; font-style:italic; }
   .prospeccion-card .pregunta { font-size:11.5px; color:var(--muted); margin-top:3px; }
   .checkin-banner { background:var(--naranja); color:#2c1600; border-radius:14px; padding:12px 14px; margin-bottom:14px; font-size:12.5px; font-weight:700; }
+  .usuario-selector { display:flex; gap:6px; padding:0 18px 10px; position:sticky; top:0; z-index:5; background:var(--bg); }
+  .usuario-btn { flex:1; text-align:center; padding:8px 0; font-size:12px; font-weight:700; border-radius:10px; background:var(--card); color:var(--muted); cursor:pointer; border:1.5px solid transparent; }
+  .usuario-btn.active { background:var(--verde); color:#062b23; border-color:var(--verde); }
+  .cap-progress-track { height:6px; background:var(--card-2); border-radius:4px; overflow:hidden; margin-top:8px; }
+  .cap-progress-fill { height:100%; background:var(--verde); border-radius:4px; transition:width .2s; }
+  .cap-progress-lbl { font-size:9.5px; color:var(--muted); margin-top:3px; text-align:right; }
 </style>
 </head>
 <body>
@@ -183,6 +189,11 @@
   </div>
   <div class="header-btns" id="header-btns"></div>
 </header>
+<div class="usuario-selector">
+  <div class="usuario-btn" id="usuario-btn-Martu" onclick="cambiarUsuarioActivo('Martu')">Martu</div>
+  <div class="usuario-btn" id="usuario-btn-Jose" onclick="cambiarUsuarioActivo('Jose')">José</div>
+  <div class="usuario-btn" id="usuario-btn-Ambos" onclick="cambiarUsuarioActivo('Ambos')">Ambos</div>
+</div>
 
 <main>
   <div class="banner-error" id="banner-error"></div>
@@ -328,6 +339,25 @@ function apiCall(action, params) {
 
 // ================= NAV =================
 const cacheVistas = { agenda: null, activos: null, potenciales: null, metas: null };
+
+// ================= SELECTOR DE USUARIO (Martu/José/Ambos) =================
+window._usuarioActivo = localStorage.getItem('usuarioActivo') || 'Ambos';
+function pintarSelectorUsuario() {
+  ['Martu', 'Jose', 'Ambos'].forEach(u => document.getElementById('usuario-btn-' + u).classList.toggle('active', window._usuarioActivo === u));
+}
+function cambiarUsuarioActivo(u) {
+  window._usuarioActivo = u;
+  localStorage.setItem('usuarioActivo', u);
+  pintarSelectorUsuario();
+  pintarVistaActual();
+  if (document.getElementById('view-clientes').classList.contains('active')) { cargarActivos(''); filtrarYRenderizarPotenciales(); }
+  if (document.getElementById('view-captaciones').classList.contains('active')) pintarCaptaciones();
+}
+/** true si un asesor/agente corresponde al usuario activo (o si está en "Ambos"). */
+function _coincideUsuario(asesor) {
+  if (window._usuarioActivo === 'Ambos') return true;
+  return asesor === window._usuarioActivo;
+}
 
 function mostrar(v) {
   document.querySelectorAll('.view').forEach(el => el.classList.remove('active'));
@@ -512,11 +542,19 @@ function refrescarSnapshot() {
 function refrescarSnapshotYVista() {
   return refrescarSnapshot().then(function() { pintarVistaActual(); }).catch(mostrarError);
 }
+const CAL_ID_JOSE = ['279f4aa568cbf532753d90ab00a99e978930f92d93fda86aff4a42ae93aaf207@group.calendar.google.com', 'b336dc05267549bf8484438b6c1ad7cf5817203b0a24d0f04ac594c2f3bc3a60@group.calendar.google.com'];
+const CAL_ID_MARTU = ['fc5100a8f10470d43c12dfafde28085b8c3640515989dc2e848b9405d90ebf61@group.calendar.google.com', 'b789c6d2174a0630602060d8b16fe5b242bc3925fb1e983b585f8a7908872bbf@group.calendar.google.com'];
+function _eventoPasaFiltroUsuario(ev) {
+  if (window._usuarioActivo === 'Ambos') return true;
+  if (window._usuarioActivo === 'Jose' && CAL_ID_MARTU.includes(ev.calId)) return false;
+  if (window._usuarioActivo === 'Martu' && CAL_ID_JOSE.includes(ev.calId)) return false;
+  return true; // Reuniones, Captación, Personal, Solumitos: siempre visibles
+}
 function _eventosEnRango(inicio, fin) {
   if (!window._calSnapshot) return [];
   return window._calSnapshot.filter(function(ev) {
     const i = new Date(ev.inicioISO);
-    return i >= inicio && i < fin;
+    return i >= inicio && i < fin && _eventoPasaFiltroUsuario(ev);
   });
 }
 
@@ -1097,6 +1135,7 @@ function cambiarBloqueClientes(b, evt) {
 }
 function cargarActivos(filtro) {
   apiCall('getClientesActivos', { filtro: filtro || '' }).then(function(clientes) {
+    clientes = clientes.filter(c => _coincideUsuario(c.asesor));
     _cruzarConSnapshot(clientes);
     cacheVistas.activos = clientes;
     renderizarActivos(clientes);
@@ -1354,6 +1393,7 @@ function filtrarYRenderizarPotenciales() {
   if (!cacheVistas.potencialesCrudo) { document.getElementById('lista-potenciales').innerHTML = '<div class="loading">Cargando…</div>'; return; }
   const q = (document.querySelector('#bloque-potenciales .buscador').value || '').toLowerCase();
   let lista = cacheVistas.potencialesCrudo;
+  lista = lista.filter(p => !p.asesor || _coincideUsuario(p.asesor));
   if (q) lista = lista.filter(p => p.nombre.toLowerCase().indexOf(q) !== -1);
   if (tagsActivos.length) {
     lista = lista.filter(p => tagsActivos.every(t => {
@@ -1583,7 +1623,7 @@ function renderizarCaptaciones(resumen) {
       <span class="mes-chip" onclick="filtroMesTodos(false)">Ninguno</span>
       ${MESES.slice(1).map((m,i) => `<span class="mes-chip ${_mesesFiltroActivos.includes(i+1)?'active':''}" onclick="toggleMesFiltro(${i+1})">${m}</span>`).join('')}
     </div></div>`;
-  Object.keys(resumen).forEach(function(asesor) {
+  Object.keys(resumen).filter(asesor => _coincideUsuario(asesor)).forEach(function(asesor) {
     const r = resumen[asesor];
     const vaBien = r.efectividad >= 50;
     const pendientes = r.items.filter(i => !i.publicada && !i.noPublicar);
@@ -1607,9 +1647,12 @@ const CHECKLIST_CAPTACION = [
 ];
 function captacionCardHtml(i) {
   const completadas = i.etapasCompletadas || [];
+  const pct = Math.round((completadas.length / CHECKLIST_CAPTACION.length) * 100);
   return `<div class="cap-item">
     <div class="dir">${i.direccion || '(sin dirección)'}</div>
     <div class="meta">${i.tipo || ''} ${i.lugar ? '· ' + i.lugar : ''} ${i.etapa ? '· ' + i.etapa : ''}</div>
+    <div class="cap-progress-track"><div class="cap-progress-fill" style="width:${pct}%"></div></div>
+    <div class="cap-progress-lbl">${completadas.length}/${CHECKLIST_CAPTACION.length} pasos · ${pct}%</div>
     <div class="meta">Propietario: ${i.propietario || '-'} · Valor est.: ${i.valorEstimado || '-'}</div>
     <div class="meta">Autorización: ${i.autorizacion || '-'} · Escritura: ${i.escritura || '-'} · Impuestos: ${i.impuestos || '-'}</div>
     ${i.observacion ? `<div class="meta">${i.observacion}</div>` : ''}
@@ -1784,6 +1827,7 @@ function pasarAPotencialClick(sheet, fila) {
 
 // ================= INIT =================
 pintarHeaderBtns('agenda');
+pintarSelectorUsuario();
 pintarFraseMotivacional();
 refrescarSnapshot().then(() => { pintarVistaActual(); chequearSinTarea(); }).catch(mostrarError);
 pintarTagsFiltro();
