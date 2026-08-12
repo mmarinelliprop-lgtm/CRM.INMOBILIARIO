@@ -2013,6 +2013,7 @@ function agruparCaptaciones(items) {
       estado: noPublicar ? 'No quiere publicar / Rechazó ACM' : r.estadoRaw,
       publicada: publicada, noPublicar: noPublicar,
       fechaPublicacion: r.fechaPublicacion || '',
+      clienteId: r.clienteId || '',
       mesPublicacion: _mesDeFechaCorta(r.fechaPublicacion)
     }));
   });
@@ -2032,7 +2033,6 @@ function renderizarCaptaciones(resumen) {
   const MESES = ['','Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
   if (!_mesesFiltroActivos.length) _mesesFiltroActivos = [new Date().getMonth() + 1];
   let html = `<button class="btn-continuar" style="margin-bottom:12px" onclick="abrirNuevaPropiedad()">+ Nueva propiedad</button>
-    <button class="btn-chico" style="background:var(--card-2);color:var(--text);width:100%;margin-bottom:12px;padding:10px" onclick="vincularCaptacionesClick()">🔗 Vincular propietarios a la base de clientes</button>
     <div class="mes-filtro-wrap"><div class="card-title">FILTRAR PUBLICADAS POR MES</div>
     <div class="mes-filtro-row">
       <span class="mes-chip" onclick="filtroMesTodos(true)">Todos</span>
@@ -2127,6 +2127,7 @@ function captacionCardHtml(i) {
       ${i.observacion ? `<div class="cap-extra">Obs.: ${esc(i.observacion)}</div>` : ''}
     </div>
     <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+      ${i.clienteId ? '' : `<button class="btn-nopub" style="border-color:var(--lila);color:var(--lila)" onclick="vincularUnaClick(${i.fila})">🔗 Vincular cliente</button>`}
       ${(!i.publicada && !i.noPublicar) ? `<button class="btn-nopub" onclick="marcarNoPublicaClick(${i.fila})">No quiere publicar / Rechazó ACM</button>` : ''}
       ${i.noPublicar ? `<button class="btn-nopub" style="border-color:var(--verde);color:var(--verde)" onclick="deshacerNoPublicaClick(${i.fila})">↩ Deshacer</button>` : ''}
     </div>
@@ -2280,6 +2281,15 @@ function guardarNuevaPropiedad() {
       pintarCaptaciones();
     })
     .catch(mostrarError).finally(_desbloquear);
+}
+function vincularUnaClick(fila) {
+  if (_bloqueadoAhora()) return;
+  apiCall('vincularUnaCaptacion', { fila: fila }).then(function(r) {
+    if (r.error) { mostrarToast(r.error); return; }
+    mostrarToast(`✓ ${r.nombre} vinculado${r.creado ? ' (cliente nuevo)' : ''} · ${r.etapa}`);
+    cacheVistas.captacionesCrudo = null; cacheVistas.activosCrudo = null;
+    pintarCaptaciones();
+  }).catch(mostrarError).finally(_desbloquear);
 }
 function vincularCaptacionesClick() {
   if (_bloqueadoAhora()) return;
