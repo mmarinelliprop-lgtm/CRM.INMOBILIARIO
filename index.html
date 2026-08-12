@@ -334,8 +334,22 @@ function _desbloquear() { _accionEnCurso = false; }
 // Lecturas pesadas (8 calendarios, planillas enteras, IA): más margen antes de dar timeout.
 const _ACCIONES_LENTAS = ['getSnapshotCalendario','getCaptacionesCrudo','getPotencialesCrudo','getMetas','getConsultasRedesTabla','getClientesActivos','procesarMensajeIA','extraerLeadCompletoIA','aplicarLote'];
 
+// Apps Script ejecuta los pedidos de una misma cuenta DE A UNO. Si la app dispara
+// dos a la vez (por ejemplo guardar el checklist mientras lee el calendario), el
+// segundo queda esperando y se pasa del tiempo límite. Por eso TODOS los pedidos
+// —lecturas y escrituras— pasan por esta única fila, en orden.
+let _filaPedidos = Promise.resolve();
+function _enFila(fn) {
+  const proximo = _filaPedidos.then(fn, fn);
+  _filaPedidos = proximo.then(function() {}, function() {}); // la fila sigue aunque uno falle
+  return proximo;
+}
+
 let _jsonpContador = 0;
 function apiCall(action, params) {
+  return _enFila(function() { return _apiCallDirecto(action, params); });
+}
+function _apiCallDirecto(action, params) {
   return new Promise(function(resolve, reject) {
     const cbNombre = '_crmCallback' + (_jsonpContador++);
     const url = new URL(APP_URL);
@@ -382,6 +396,9 @@ function apiCall(action, params) {
  * de CORS, que Apps Script no responde). El backend lo recibe en doPost.
  */
 function apiPost(action, params) {
+  return _enFila(function() { return _apiPostDirecto(action, params); });
+}
+function _apiPostDirecto(action, params) {
   const body = JSON.stringify(Object.assign({ action: action }, params || {}));
   return fetch(APP_URL, {
     method: 'POST',
