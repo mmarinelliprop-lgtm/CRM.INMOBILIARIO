@@ -318,7 +318,7 @@
 // ================= CONEXIÓN CON LA API (Apps Script) =================
 // Pegá acá la URL de tu Web App de Apps Script (Implementar → Nueva implementación → Aplicación web).
 // Termina en /exec
-const APP_URL = 'https://script.google.com/macros/s/AKfycbwAZeUnGl2i99wChU04g1W5a8s1Vwe330ZWY3WNDlKFtY_Yu_1CUbvlyad-mp3agcdQig/exec';
+const APP_URL = 'https://script.google.com/macros/s/AKfycbyWaMzBlijjEp43oe6zqc630x-S-uX9aXdpNWEHZRNef8tZ4x_MSVHPOwSJaE2jMeU8lw/exec';
 
 // Bloqueo anti doble-click: se activa al disparar una acción y se libera cuando la
 // llamada termina (bien o mal) — ya no son 4 segundos fijos que trababan de más o de menos.
@@ -436,50 +436,67 @@ function mostrar(v) {
 }
 // ---- Cola de escrituras diferidas: se actualiza en pantalla al toque, y se manda a la planilla en lote ----
 // Reglas: (1) dedupe — si tocás dos veces lo mismo, solo viaja el estado final;
-// (2) UNA sola llamada por lote (aplicarLote), en orden; (3) si falla, se reencola
-// y se reintenta solo; (4) al minimizar/cerrar la app, se manda por sendBeacon
-// (el viejo beforeunload+JSONP nunca llegaba a salir y se perdían los cambios).
-window._pendingWrites = [];
+// (2) UNA sola llamada por lote (aplicarLote), en orden; (3) si falla, se reintenta solo;
+// (4) la cola VIVE en localStorage: sobrevive a recargas, cierres y cortes de conexión,
+// y nada se saca de ahí hasta que el servidor confirmó que lo recibió;
+// (5) al minimizar/cerrar, además se manda por sendBeacon como refuerzo (las escrituras
+// son SET idempotentes, así que si llegan dos veces no pasa nada).
+const _LS_COLA = 'crm_cola_escrituras';
+function _guardarCola() { try { localStorage.setItem(_LS_COLA, JSON.stringify(window._pendingWrites)); } catch (e) {} }
+window._pendingWrites = (function() { try { return JSON.parse(localStorage.getItem(_LS_COLA) || '[]'); } catch (e) { return []; } })();
 let _flushEnCurso = false;
 let _flushPromesa = Promise.resolve({ ok: true });
 let _escrituraContador = 0;
 function _claveEscritura(accion, params) {
   if (accion === 'setEtapaCaptacionChecklist') return accion + '|' + params.fila + '|' + params.key;
   if (accion === 'actualizarCaptacion') return accion + '|' + params.fila;
-  return accion + '|' + (_escrituraContador++); // el resto no se dedupea
+  return accion + '|' + Date.now() + '_' + (_escrituraContador++); // el resto no se dedupea
 }
 function _encolarEscritura(accion, params) {
   const clave = _claveEscritura(accion, params);
   window._pendingWrites = window._pendingWrites.filter(w => w._clave !== clave);
   window._pendingWrites.push({ _clave: clave, accion: accion, params: params });
+  _guardarCola();
 }
 function _flushEscrituras() {
   if (_flushEnCurso) return _flushPromesa; // si ya hay un envío en vuelo, esperamos a ese (no se refresca con datos viejos)
   if (!window._pendingWrites.length) return Promise.resolve({ ok: true });
   _flushEnCurso = true;
-  const lote = window._pendingWrites.splice(0, window._pendingWrites.length);
+  const lote = window._pendingWrites.slice(); // copia: NO se saca nada de la cola hasta que el servidor confirme
   _flushPromesa = apiPost('aplicarLote', { lote: lote.map(w => ({ accion: w.accion, params: w.params })) })
-    .then(function() { _flushEnCurso = false; return { ok: true }; })
-    .catch(function(err) {
+    .then(function() {
       _flushEnCurso = false;
-      // Reencolar al principio para no perder nada; el intervalo reintenta solo.
-      window._pendingWrites = lote.concat(window._pendingWrites);
+      // Confirmado: recién ahora se sacan de la cola los que viajaron (lo encolado durante el vuelo queda para el próximo lote).
+      window._pendingWrites = window._pendingWrites.filter(w => lote.indexOf(w) === -1);
+      _guardarCola();
+      return { ok: true };
+    })
+    .catch(function(err) {
+      _flushEnCurso = false; // la cola quedó intacta (nunca se vació): el intervalo reintenta solo
       mostrarToast('⚠️ Sin conexión con la planilla — tus cambios quedan guardados acá y se reintentan solos.');
       return { ok: false, error: err };
     });
   return _flushPromesa;
 }
 setInterval(() => { if (window._pendingWrites.length && !_flushEnCurso) _flushEscrituras(); }, 8000);
-/** Último recurso al minimizar/cerrar: sendBeacon sí llega aunque la página muera. */
+/** Refuerzo al minimizar/cerrar: sendBeacon sí llega aunque la página muera. No vacía la cola:
+ *  si el beacon llegó, el reenvío al reabrir es inocuo (SET); si no llegó, la cola lo recupera. */
 function _flushBeacon() {
   if (!window._pendingWrites.length) return;
-  const lote = window._pendingWrites.splice(0, window._pendingWrites.length).map(w => ({ accion: w.accion, params: w.params }));
-  const body = JSON.stringify({ action: 'aplicarLote', lote: lote });
+  _guardarCola();
+  const body = JSON.stringify({ action: 'aplicarLote', lote: window._pendingWrites.map(w => ({ accion: w.accion, params: w.params })) });
   if (navigator.sendBeacon) navigator.sendBeacon(APP_URL, new Blob([body], { type: 'text/plain;charset=utf-8' }));
   else fetch(APP_URL, { method: 'POST', body: body, keepalive: true, headers: { 'Content-Type': 'text/plain;charset=utf-8' } }).catch(() => {});
 }
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') _flushBeacon(); });
 window.addEventListener('pagehide', _flushBeacon);
+// Al abrir la app: si quedaron cambios sin confirmar de una sesión anterior, se mandan ya.
+if (window._pendingWrites.length) {
+  setTimeout(function() {
+    mostrarToast('Recuperé ' + window._pendingWrites.length + ' cambio' + (window._pendingWrites.length > 1 ? 's' : '') + ' sin guardar de la última vez — los estoy mandando…');
+    _flushEscrituras();
+  }, 1500);
+}
 function cambiarBloqueCarga(b, evt) {
   document.querySelectorAll('#view-carga > .top-toggle > .top-toggle-btn').forEach(x => x.classList.remove('active'));
   evt.target.classList.add('active');
