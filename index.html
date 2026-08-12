@@ -1507,7 +1507,7 @@ function renderizarActivos(clientes) {
     const color = (items[0] && items[0].color) || COLOR_ETAPA[etapa] || '#8b8fa8';
     const filas = items.map(c => `
       <div class="cliente-row" onclick="abrirPerfil('${c.sheet}', ${c.fila})">
-        <div style="flex:1"><div class="cliente-nombre">${esc(c.nombre)}${c.asesor ? ' <span style="color:var(--muted);font-weight:500;font-size:10.5px">· ' + c.asesor + '</span>' : ''}</div><div class="cliente-tarea">${esc(c.proximaTarea)}${c.proximaFechaISO ? ' · ' + new Date(c.proximaFechaISO).toLocaleDateString('es-AR',{day:'2-digit',month:'2-digit'}) : ''}</div></div>
+        <div style="flex:1"><div class="cliente-nombre">${esc(c.nombre)}${c.propiedad ? ' <span style="color:var(--muted);font-weight:500;font-size:10.5px">· ' + esc(c.propiedad) + '</span>' : ''}${c.asesor ? ' <span style="color:var(--muted);font-weight:500;font-size:10.5px">· ' + c.asesor + '</span>' : ''}</div><div class="cliente-tarea">${esc(c.proximaTarea)}${c.proximaFechaISO ? ' · ' + new Date(c.proximaFechaISO).toLocaleDateString('es-AR',{day:'2-digit',month:'2-digit'}) : ''}</div></div>
         <div class="cliente-actions">
           <button class="icon-btn" onclick="event.stopPropagation();abrirWhatsapp('${c.telefono}')">💬</button>
         </div>
@@ -2014,6 +2014,7 @@ function agruparCaptaciones(items) {
       publicada: publicada, noPublicar: noPublicar,
       fechaPublicacion: r.fechaPublicacion || '',
       clienteId: r.clienteId || '',
+      propietarioNombre: r.propietario || '',
       mesPublicacion: _mesDeFechaCorta(r.fechaPublicacion)
     }));
   });
@@ -2031,13 +2032,14 @@ let _asesorTabActivo = null; // para el modo "Ambos": qué pestaña de asesor es
 window._capAbiertos = window._capAbiertos || {}; // recuerda qué secciones (Pendientes/Publicadas) quedaron abiertas
 function renderizarCaptaciones(resumen) {
   const MESES = ['','Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
-  if (!_mesesFiltroActivos.length) _mesesFiltroActivos = [new Date().getMonth() + 1];
+  if (!_mesesFiltroActivos.length) _mesesFiltroActivos = [new Date().getMonth() + 1, 0]; // 0 = publicadas sin fecha cargada
   let html = `<button class="btn-continuar" style="margin-bottom:12px" onclick="abrirNuevaPropiedad()">+ Nueva propiedad</button>
     <div class="mes-filtro-wrap"><div class="card-title">FILTRAR PUBLICADAS POR MES</div>
     <div class="mes-filtro-row">
       <span class="mes-chip" onclick="filtroMesTodos(true)">Todos</span>
       <span class="mes-chip" onclick="filtroMesTodos(false)">Ninguno</span>
       ${MESES.slice(1).map((m,i) => `<span class="mes-chip ${_mesesFiltroActivos.includes(i+1)?'active':''}" onclick="toggleMesFiltro(${i+1})">${m}</span>`).join('')}
+      <span class="mes-chip ${_mesesFiltroActivos.includes(0)?'active':''}" onclick="toggleMesFiltro(0)">Sin fecha</span>
     </div></div>`;
 
   const asesores = Object.keys(resumen).filter(asesor => _coincideUsuario(asesor));
@@ -2116,6 +2118,7 @@ function captacionCardHtml(i) {
         <div class="cap-progreso-pct">${pct}%</div>
       </div>
     </div>
+    ${i.clienteId ? `<div class="cap-extra" style="color:var(--lila)">Cliente: ${esc(i.propietarioNombre) || '(sin nombre)'} · <span style="color:var(--muted)">para cambiarlo, editá el propietario con el lápiz</span></div>` : ''}
     <div class="cap-extra-title" onclick="toggleExtraCap(${i.fila})">Ver más datos ▾</div>
     <div id="extra-${i.fila}" style="display:${extraAbierto ? 'block' : 'none'}">
       <div class="cap-extra">Etapa pipeline: ${esc(i.etapa) || '-'} · Estado: ${esc(i.estado) || '-'}</div>
@@ -2128,6 +2131,7 @@ function captacionCardHtml(i) {
     </div>
     <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
       ${i.clienteId ? '' : `<button class="btn-nopub" style="border-color:var(--lila);color:var(--lila)" onclick="vincularUnaClick(${i.fila})">🔗 Vincular cliente</button>`}
+      ${(i.publicada && !i.fechaPublicacion) ? `<button class="btn-nopub" style="border-color:var(--naranja);color:var(--naranja)" onclick="abrirFechaPublicacion(${i.fila})">📅 Poner fecha</button>` : ''}
       ${(!i.publicada && !i.noPublicar) ? `<button class="btn-nopub" onclick="marcarNoPublicaClick(${i.fila})">No quiere publicar / Rechazó ACM</button>` : ''}
       ${i.noPublicar ? `<button class="btn-nopub" style="border-color:var(--verde);color:var(--verde)" onclick="deshacerNoPublicaClick(${i.fila})">↩ Deshacer</button>` : ''}
     </div>
@@ -2282,6 +2286,25 @@ function guardarNuevaPropiedad() {
     })
     .catch(mostrarError).finally(_desbloquear);
 }
+function abrirFechaPublicacion(fila) {
+  const hoy = new Date().toISOString().slice(0, 10);
+  document.getElementById('modal-box').innerHTML = `
+    <div class="modal-title">Fecha de publicación</div>
+    <div class="modal-sub">Es la misma que la fecha de alta.</div>
+    <input type="date" class="q" id="fp-fecha" value="${hoy}">
+    <button class="btn-continuar" onclick="guardarFechaPublicacion(${fila})">Guardar</button>
+    <div class="modal-cancelar" onclick="cerrarModal()">Cancelar</div>`;
+  document.getElementById('modal-overlay').classList.add('active');
+}
+function guardarFechaPublicacion(fila) {
+  const v = document.getElementById('fp-fecha').value;
+  if (!v) { mostrarToast('Elegí una fecha.'); return; }
+  if (_bloqueadoAhora()) return;
+  apiCall('setFechaPublicacion', { fila: fila, fecha: new Date(v + 'T12:00:00').toISOString() }).then(function(r) {
+    cerrarModal(); mostrarToast('✓ Fecha guardada: ' + r.fecha);
+    cacheVistas.captacionesCrudo = null; pintarCaptaciones();
+  }).catch(mostrarError).finally(_desbloquear);
+}
 function vincularUnaClick(fila) {
   if (_bloqueadoAhora()) return;
   apiCall('vincularUnaCaptacion', { fila: fila }).then(function(r) {
@@ -2304,7 +2327,7 @@ function toggleMesFiltro(m) {
   renderizarCaptaciones(agruparCaptaciones(cacheVistas.captacionesCrudo)); // solo re-pinta las tarjetas, prospección queda intacta
 }
 function filtroMesTodos(todos) {
-  _mesesFiltroActivos = todos ? Array.from({length:12}, (_,i)=>i+1) : [];
+  _mesesFiltroActivos = todos ? Array.from({length:13}, (_,i)=>i) : []; // 0..12 (0 = sin fecha)
   renderizarCaptaciones(agruparCaptaciones(cacheVistas.captacionesCrudo));
 }
 // ---- Prospección diaria ----
