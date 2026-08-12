@@ -355,7 +355,7 @@ function _bloqueadoAhora() {
 function _desbloquear() { _accionEnCurso = false; }
 
 // Lecturas pesadas (8 calendarios, planillas enteras, IA): más margen antes de dar timeout.
-const _ACCIONES_LENTAS = ['getSnapshotCalendario','getCaptacionesCrudo','getPotencialesCrudo','getMetas','getMetasAgenda','getClientesActivos','vincularCaptacionesAClientes','listarPlantillas','getClientesParaDocumentos','generarDocumento','getCamposPlantilla','procesarMensajeIA','extraerLeadCompletoIA','aplicarLote'];
+const _ACCIONES_LENTAS = ['getSnapshotCalendario','getCaptacionesCrudo','getPotencialesCrudo','getMetas','getMetasAgenda','getClientesActivos','getProspeccionDelDia','getPerfilCliente','getCoincidencias','getPropiedadesDeCliente','vincularCaptacionesAClientes','vincularUnaCaptacion','listarPlantillas','getClientesParaDocumentos','generarDocumento','getCamposPlantilla','procesarMensajeIA','extraerLeadCompletoIA','aplicarLote'];
 
 // Apps Script ejecuta los pedidos de una misma cuenta DE A UNO. Si la app dispara
 // dos a la vez (por ejemplo guardar el checklist mientras lee el calendario), el
@@ -368,9 +368,22 @@ function _enFila(fn) {
   return proximo;
 }
 
+// Reintento automático: Apps Script a veces procesa el pedido pero la respuesta se
+// pierde en el camino. Antes eso mostraba un error; ahora se reintenta solo dos veces.
+function _conReintento(fn, intentos) {
+  intentos = intentos === undefined ? 2 : intentos;
+  return fn().catch(function(err) {
+    if (intentos <= 0) throw err;
+    const espera = intentos === 2 ? 500 : 2000;
+    return new Promise(function(r) { setTimeout(r, espera); }).then(function() { return _conReintento(fn, intentos - 1); });
+  });
+}
+
 let _jsonpContador = 0;
 function apiCall(action, params) {
-  return _enFila(function() { return _apiCallDirecto(action, params); });
+  // El reloj del tiempo límite arranca DENTRO de la fila (cuando el pedido sale de verdad).
+  // Antes se contaba desde que se encolaba, así que un pedido podía "vencer" sin haber salido.
+  return _enFila(function() { return _conReintento(function() { return _apiCallDirecto(action, params); }); });
 }
 function _apiCallDirecto(action, params) {
   return new Promise(function(resolve, reject) {
@@ -419,7 +432,7 @@ function _apiCallDirecto(action, params) {
  * de CORS, que Apps Script no responde). El backend lo recibe en doPost.
  */
 function apiPost(action, params) {
-  return _enFila(function() { return _apiPostDirecto(action, params); });
+  return _enFila(function() { return _conReintento(function() { return _apiPostDirecto(action, params); }); });
 }
 function _apiPostDirecto(action, params) {
   const body = JSON.stringify(Object.assign({ action: action }, params || {}));
@@ -1955,7 +1968,70 @@ function pintarMetasAgenda() {
     document.getElementById('metas-contenido').insertAdjacentHTML('afterbegin',
       `<div class="card"><div class="card-title">HECHO ESTE MES (LEÍDO DE LA AGENDA)</div>${filas}
        <div style="font-size:10.5px;color:var(--muted);margin-top:8px">Cuenta solo las tareas marcadas como hechas ✓.</div></div>`);
+    pintarVencidasSinTildar();
   }).catch(function() { /* si falla, la vista de metas igual se muestra */ });
+}
+/**
+ * Tareas que ya pasaron de fecha y quedaron sin tildar. Se leen del snapshot que la app
+ * ya tiene cargado, así que no cuesta ningún pedido extra al servidor.
+ */
+function pintarVencidasSinTildar() {
+  const ahora = new Date();
+  const vencidas = (window._calSnapshot || []).filter(function(ev) {
+    return !ev.completada && new Date(ev.inicioISO) < ahora && _metaDeTitulo(ev.titulo);
+  }).sort(function(a, b) { return new Date(b.inicioISO) - new Date(a.inicioISO); }).slice(0, 15);
+  if (!vencidas.length) return;
+  const html = vencidas.map(ev => `<div class="cap-item">
+      <div class="cap-dir">${esc(ev.titulo)}</div>
+      <div class="cap-extra">${fechaDDMMAAAA(ev.inicioISO)} · cuenta para ${_metaDeTitulo(ev.titulo)}</div>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="btn-chico" style="background:var(--verde);color:#062b23" onclick="contarVencida('${ev.id}','${_metaDeTitulo(ev.titulo)}')">✓ Sí, la hice</button>
+        <button class="btn-chico" style="background:var(--magenta);color:#fff" onclick="descartarVencida('${ev.id}','${_metaDeTitulo(ev.titulo)}')">✗ No</button>
+      </div></div>`).join('');
+  document.getElementById('metas-contenido').insertAdjacentHTML('afterbegin',
+    `<div class="card" style="border:1px solid var(--naranja)"><div class="card-title">TAREAS VENCIDAS SIN TILDAR (${vencidas.length})</div>
+     <div style="font-size:10.5px;color:var(--muted);margin-bottom:10px">Ya pasó la fecha y no están marcadas. Si las hiciste, se tildan en el calendario y suman a la meta.</div>${html}</div>`);
+}
+/** Qué meta le corresponde a un título, con las mismas palabras clave que usa el servidor. */
+const METAS_PALABRAS_APP = {
+  'Prospección': { incluye: ['prospeccion', 'prospectar', 'prospecto'] },
+  'Entrevistas de captación': { incluye: ['prelisting', 'primer visita'] },
+  'ACM presentados': { incluye: ['acm', 'tasacion'] },
+  'Muestras': { incluye: ['muestra', 'visita'], excluye: ['primer visita'] },
+  'Búsquedas': { incluye: ['busqueda', 'buscar'] }
+};
+function _metaDeTitulo(titulo) {
+  const t = ('' + titulo).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  let encontrada = null;
+  Object.keys(METAS_PALABRAS_APP).forEach(function(meta) {
+    if (encontrada) return;
+    const cfg = METAS_PALABRAS_APP[meta];
+    if (cfg.excluye && cfg.excluye.some(p => t.indexOf(p) !== -1)) return;
+    if (cfg.incluye.some(p => t.indexOf(p) !== -1)) encontrada = meta;
+  });
+  return encontrada;
+}
+function descartarVencida(eventId, metrica) {
+  apiCall('confirmarCandidatoMeta', { mes: new Date().getMonth() + 1, metrica: metrica, eventId: eventId, estado: 'rechazado' })
+    .then(function() { mostrarToast('Descartada'); cargarMetas(); }).catch(mostrarError);
+}
+/** Confirma que se hizo: la tilda en el calendario y ofrece agendar el próximo paso. */
+function contarVencida(eventId, metrica) {
+  if (_bloqueadoAhora()) return;
+  apiCall('confirmarCandidatoMeta', { mes: new Date().getMonth() + 1, metrica: metrica, eventId: eventId, estado: 'confirmado' })
+    .then(function(r) {
+      mostrarToast('✓ Contada y tildada en el calendario');
+      refrescarSnapshot().then(function() { cargarMetas(); });
+      if (r && r.cliente && r.cliente.sheet) _ofrecerAgendarSiguiente(r.cliente);
+    }).catch(mostrarError).finally(_desbloquear);
+}
+function _ofrecerAgendarSiguiente(c) {
+  document.getElementById('modal-box').innerHTML = `
+    <div class="modal-title">¿Agendás la próxima?</div>
+    <div class="modal-sub">${esc(c.nombre) || 'Este contacto'} quedó sin tarea siguiente.</div>
+    <button class="opcion-btn" onclick="cerrarModal();abrirAgendarTarea('${c.sheet}',${c.fila},'${(c.nombre||'').replace(/'/g,"\\'")}')">Sí, agendar ahora<span class="flecha">›</span></button>
+    <div class="modal-cancelar" onclick="cerrarModal()">Ahora no</div>`;
+  document.getElementById('modal-overlay').classList.add('active');
 }
 function responderCandidatoMeta(metrica, eventId, estado) {
   const mes = new Date().getMonth() + 1;
