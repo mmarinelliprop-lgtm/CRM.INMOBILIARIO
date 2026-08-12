@@ -369,7 +369,7 @@ function apiCall(action, params) {
       if (resuelto) return;
       resuelto = true;
       limpiar();
-      reject(new Error('No se pudo conectar con la API.'));
+      reject(new Error('No se pudo conectar con la API.\n\nAcción: ' + action + '\n\nURL usada:\n' + APP_URL));
     };
     script.src = url.toString();
     document.body.appendChild(script);
@@ -662,8 +662,9 @@ function mostrarError(err) {
   console.error(err);
   const b = document.getElementById('banner-error');
   b.style.display = 'block';
-  b.innerText = 'Error: ' + (err.message || err);
-  setTimeout(() => { b.style.display = 'none'; }, 6000);
+  b.style.whiteSpace = 'pre-wrap';
+  b.innerText = 'Error: ' + (err.message || err) + '\n\n(tocá acá para cerrar)';
+  b.onclick = function() { b.style.display = 'none'; }; // no se autooculta: así se puede leer/copiar
 }
 
 // ================= AGENDA (todo desde el snapshot local de Calendar) =================
