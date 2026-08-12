@@ -86,6 +86,7 @@
   .ev-row input[type="datetime-local"] { background:var(--card-2); border-radius:8px; padding:6px 8px; }
   .ev-sug { padding:9px 10px; font-size:12.5px; background:var(--card-2); border-radius:8px; margin-top:6px; cursor:pointer; }
   .ev-acciones { display:flex; align-items:center; justify-content:flex-end; gap:14px; margin-top:18px; }
+  .opcion-btn.elegido { background:var(--verde); color:#062b23; border-color:var(--verde); }
 
   /* TOAST (aviso no bloqueante, reemplaza a los alert) */
   #toast { position:fixed; left:50%; bottom:88px; transform:translateX(-50%) translateY(20px); background:var(--card-2); color:var(--text); border:1px solid var(--line); border-radius:14px; padding:11px 16px; font-size:12.5px; font-weight:700; z-index:120; opacity:0; pointer-events:none; transition:opacity .2s, transform .2s; max-width:86vw; text-align:center; box-shadow:0 8px 24px rgba(0,0,0,.45); }
@@ -399,7 +400,15 @@ function _apiCallDirecto(action, params) {
 
     const script = document.createElement('script');
     let resuelto = false;
-    const limpiar = function() { delete window[cbNombre]; script.remove(); clearTimeout(timeoutId); };
+    // Al limpiar NO se borra la función: se deja vacía. Si la respuesta llega tarde
+    // (después del tiempo límite o de un reintento), se ejecuta sin romper nada.
+    // Antes se borraba y la respuesta tardía tiraba "_crmCallbackN is not defined".
+    const limpiar = function() {
+      window[cbNombre] = function() {};
+      setTimeout(function() { delete window[cbNombre]; }, 60000);
+      script.remove();
+      clearTimeout(timeoutId);
+    };
     const msTimeout = _ACCIONES_LENTAS.includes(action) ? 45000 : 20000;
     const timeoutId = setTimeout(function() {
       if (resuelto) return;
@@ -736,6 +745,7 @@ function mismoDia(a, b) { return a.getFullYear()===b.getFullYear() && a.getMonth
 // ---- SEMANA ----
 function pintarSemana() {
   const lunes = new Date(diaMostrado);
+  lunes.setHours(0, 0, 0, 0); // sin esto la columna iba de "hoy a esta hora" a "mañana a esta hora" y todo aparecía corrido un día
   const diaSemana = (lunes.getDay() + 6) % 7;
   lunes.setDate(lunes.getDate() - diaSemana);
   const dias = []; for (let i = 0; i < 7; i++) { const d = new Date(lunes); d.setDate(d.getDate() + i); dias.push(d); }
@@ -757,7 +767,7 @@ function pintarSemana() {
       const inicio = new Date(ev.inicioISO), fin = new Date(ev.finISO);
       const inicioH = inicio.getHours() + inicio.getMinutes()/60, finH = fin.getHours() + fin.getMinutes()/60;
       const top = (inicioH - 8) * alturaHora, height = Math.max((finH - inicioH) * alturaHora - 2, 16);
-      col += `<div class="semana-event ev-${ev.clase} ${ev.completada?'completada':''}" style="top:${top}px;height:${height}px" onclick="marcarHecho('${ev.id}')">${ev.completada?'✓ ':''}${ev.titulo}</div>`;
+      col += `<div class="semana-event ev-${ev.clase} ${ev.completada?'completada':''}" style="top:${top}px;height:${height}px" data-ev="${ev.id}" onclick="abrirEvento('${ev.id}')" onmousedown="iniciarMoverEvento(event,'${ev.id}')" ontouchstart="iniciarMoverEvento(event,'${ev.id}')">${ev.completada?'✓ ':''}${ev.titulo}</div>`;
     });
     col += `</div></div>`;
     html += col;
@@ -876,7 +886,7 @@ function renderizarDia(eventos) {
     const contenido = compacto
       ? `${ev.completada ? '✓ ' : ''}${horaTxt} · ${ev.titulo}${subTxt ? ' · ' + subTxt : ''}`
       : `${ev.completada ? '✓ ' : ''}${ev.titulo}<div class="sub">${horaTxt}${subTxt ? ' · ' + subTxt : ''}</div>`;
-    return `<div class="cal-event ev-${ev.clase} ${ev.completada ? 'completada' : ''} ${compacto}" style="top:${ev._top}px;height:${ev._height}px;left:calc(${leftPct}% + 2px);width:calc(${anchoPct}% - 4px);right:auto" onclick="marcarHecho('${ev.id}')">${contenido}</div>`;
+    return `<div class="cal-event ev-${ev.clase} ${ev.completada ? 'completada' : ''} ${compacto}" style="top:${ev._top}px;height:${ev._height}px;left:calc(${leftPct}% + 2px);width:calc(${anchoPct}% - 4px);right:auto" data-ev="${ev.id}" onclick="abrirEvento('${ev.id}')" onmousedown="iniciarMoverEvento(event,'${ev.id}')" ontouchstart="iniciarMoverEvento(event,'${ev.id}')">${contenido}</div>`;
   }).join('');
   // Capa transparente para arrastrar y crear (queda por debajo de los eventos, que siguen clickeables).
   const altoTotal = HORAS.length * alturaHora;
@@ -887,6 +897,122 @@ function renderizarDia(eventos) {
 
 // ---- Tarea manual ----
 function toDatetimeLocal(d) { const p = n => String(n).padStart(2,'0'); return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+'T'+p(d.getHours())+':'+p(d.getMinutes()); }
+// ---- Tocar un evento: abre el detalle para editarlo, marcarlo hecho o borrarlo ----
+function abrirEvento(id) {
+  if (window._moviendo && window._moviendo.arrastro) return; // veníamos de arrastrar, no es un toque
+  const ev = (window._calSnapshot || []).find(e => e.id === id);
+  if (!ev) return;
+  const inicio = new Date(ev.inicioISO);
+  const dur = Math.round((new Date(ev.finISO) - inicio) / 60000);
+  document.getElementById('modal-box').innerHTML = `
+    <input class="ev-titulo" id="edt-titulo" value="${esc(ev.titulo)}">
+    <div class="ev-row"><span class="ev-ico">🕐</span><input type="datetime-local" id="edt-fecha" value="${toDatetimeLocal(inicio)}">
+      <input type="number" id="edt-dur" value="${dur}" min="15" step="15"></div>
+    <div class="ev-row"><span class="ev-ico">📍</span><input id="edt-ubicacion" value="${esc(ev.ubicacion || '')}" placeholder="Agregar ubicación"></div>
+    ${ev.cliente ? `<div class="ev-row"><span class="ev-ico">👤</span><span style="font-size:13px">${esc(ev.cliente)}</span></div>` : ''}
+    ${ev.completada
+      ? `<button class="btn-continuar" style="background:var(--card-2);color:var(--text)" onclick="cerrarModal();abrirDeshacerDe('${id}')">↩ Deshacer (está marcada como hecha)</button>`
+      : `<button class="btn-continuar" onclick="cerrarModal();marcarHecho('${id}')">✓ Marcar hecha</button>`}
+    <div class="ev-acciones">
+      <div class="modal-cancelar" style="margin:0;color:var(--magenta)" onclick="eliminarEventoClick('${id}')">Eliminar</div>
+      <button class="btn-continuar" style="margin:0;width:auto;padding:10px 22px" onclick="guardarEdicionEvento('${id}')">Guardar</button>
+    </div>`;
+  document.getElementById('modal-overlay').classList.add('active');
+}
+function abrirDeshacerDe(id) { eventoActivoId = id; abrirDeshacer(); }
+function guardarEdicionEvento(id) {
+  if (_bloqueadoAhora()) return;
+  const datos = {
+    titulo: document.getElementById('edt-titulo').value.trim(),
+    fecha: new Date(document.getElementById('edt-fecha').value).toISOString(),
+    duracion: Number(document.getElementById('edt-dur').value) || 30,
+    ubicacion: document.getElementById('edt-ubicacion').value.trim()
+  };
+  // Se ve el cambio al instante; la escritura viaja atrás.
+  const ev = (window._calSnapshot || []).find(e => e.id === id);
+  if (ev) {
+    ev.titulo = datos.titulo; ev.ubicacion = datos.ubicacion;
+    ev.inicioISO = datos.fecha;
+    ev.finISO = new Date(new Date(datos.fecha).getTime() + datos.duracion * 60000).toISOString();
+  }
+  cerrarModal(); pintarVistaActual(); mostrarToast('✓ Guardado');
+  apiCall('actualizarEvento', { eventId: id, datos: datos })
+    .then(function() { refrescarSnapshot().then(pintarVistaActual); })
+    .catch(function(err) { mostrarError(err); refrescarSnapshotYVista(); })
+    .finally(_desbloquear);
+}
+function eliminarEventoClick(id) {
+  if (!confirm('¿Eliminar este evento del calendario?')) return;
+  cerrarModal();
+  window._calSnapshot = (window._calSnapshot || []).filter(e => e.id !== id);
+  pintarVistaActual();
+  apiCall('eliminarEvento', { eventId: id })
+    .then(function() { mostrarToast('Evento eliminado'); })
+    .catch(function(err) { mostrarError(err); refrescarSnapshotYVista(); });
+}
+
+// ---- Arrastrar un evento ya creado para cambiarle día y horario ----
+let _moviendo = null;
+function iniciarMoverEvento(e, id) {
+  e.stopPropagation(); // no dispara el arrastre de "crear evento" de la grilla de abajo
+  const punto = e.touches ? e.touches[0] : e;
+  window._moviendo = _moviendo = { id: id, x0: punto.clientX, y0: punto.clientY, arrastro: false, el: e.currentTarget };
+}
+function _moverEventoMouse(e) {
+  if (!_moviendo) return;
+  const punto = e.touches ? e.touches[0] : e;
+  const dx = punto.clientX - _moviendo.x0, dy = punto.clientY - _moviendo.y0;
+  if (!_moviendo.arrastro && Math.abs(dx) + Math.abs(dy) < 8) return; // todavía puede ser un toque
+  _moviendo.arrastro = true;
+  _moviendo.el.style.opacity = '.55';
+  _moviendo.el.style.transform = `translate(${dx}px, ${dy}px)`;
+  e.preventDefault();
+}
+function _soltarEventoMouse(e) {
+  if (!_moviendo) return;
+  const mov = _moviendo;
+  _moviendo = null;
+  mov.el.style.opacity = ''; mov.el.style.transform = '';
+  if (!mov.arrastro) { setTimeout(function() { window._moviendo = null; }, 50); return; }
+  const punto = (e.changedTouches ? e.changedTouches[0] : e);
+  const destino = _celdaDebajo(punto.clientX, punto.clientY);
+  setTimeout(function() { window._moviendo = null; }, 50); // evita que el click abra el detalle
+  if (!destino) return;
+  const ev = (window._calSnapshot || []).find(x => x.id === mov.id);
+  if (!ev) return;
+  const dur = new Date(ev.finISO) - new Date(ev.inicioISO);
+  ev.inicioISO = destino.toISOString();
+  ev.finISO = new Date(destino.getTime() + dur).toISOString();
+  pintarVistaActual();
+  mostrarToast('Movido al ' + fechaDDMMAAAA(destino) + ' ' + _hhmm(destino.getHours() * 60 + destino.getMinutes()));
+  apiCall('moverEvento', { eventId: mov.id, fecha: destino.toISOString() })
+    .then(function() { refrescarSnapshot().then(pintarVistaActual); })
+    .catch(function(err) { mostrarError(err); refrescarSnapshotYVista(); });
+}
+/** Traduce la posición donde se soltó a día y hora, ajustado de a 15 minutos. */
+function _celdaDebajo(x, y) {
+  const cols = document.querySelectorAll('.semana-daybody, .cal-drag-layer');
+  for (let i = 0; i < cols.length; i++) {
+    const r = cols[i].getBoundingClientRect();
+    if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) {
+      const attr = cols[i].getAttribute('onmousedown') || '';
+      const m = attr.match(/'([^']+)',(\d+),(\d+)/);
+      if (!m) return null;
+      const dia = new Date(m[1]);
+      const horaBase = Number(m[2]), horasVisibles = Number(m[3]);
+      const min = _minutosDesdeY(y - r.top, r.height, horaBase, horasVisibles);
+      const d = new Date(dia);
+      d.setHours(Math.floor(min / 60), min % 60, 0, 0);
+      return d;
+    }
+  }
+  return null;
+}
+document.addEventListener('mousemove', _moverEventoMouse);
+document.addEventListener('mouseup', _soltarEventoMouse);
+document.addEventListener('touchmove', _moverEventoMouse, { passive: false });
+document.addEventListener('touchend', _soltarEventoMouse);
+
 // ---- Arrastrar sobre la grilla para crear (como Google Calendar) ----
 // Se puede arrastrar en Día y en Semana: al soltar, abre el cuadro con el horario ya puesto.
 let _arrastre = null;
@@ -896,6 +1022,7 @@ function _minutosDesdeY(y, alto, horaBase, horasVisibles) {
   return Math.round(min / 15) * 15; // se ajusta de a 15 minutos, como Calendar
 }
 function iniciarArrastre(e, contenedor, dia, horaBase, horasVisibles) {
+  if (window._moviendo) return; // se está arrastrando un evento existente, no creamos uno nuevo
   const rect = contenedor.getBoundingClientRect();
   const y = (e.touches ? e.touches[0].clientY : e.clientY) - rect.top;
   _arrastre = { cont: contenedor, dia: new Date(dia), horaBase: horaBase, horasVisibles: horasVisibles,
@@ -943,7 +1070,8 @@ document.addEventListener('touchend', soltarArrastre);
 /** Cuadro de creación rápida, con el mismo formato que el de Google Calendar. */
 function abrirEventoRapido(inicio, duracionMin) {
   const fin = new Date(inicio.getTime() + duracionMin * 60000);
-  window._eventoRapido = { inicio: inicio, duracion: duracionMin, cliente: null };
+  const borradorPrevio = window._eventoRapido && window._eventoRapido.borrador;
+  window._eventoRapido = { inicio: inicio, duracion: duracionMin, cliente: null, borrador: borradorPrevio };
   window._personaElegida = null;
   document.getElementById('modal-box').innerHTML = `
     <input class="ev-titulo" id="ev-titulo" placeholder="Agregar título" autocomplete="off">
@@ -972,6 +1100,16 @@ function abrirEventoRapido(inicio, duracionMin) {
       <button class="btn-continuar" style="margin:0;width:auto;padding:10px 22px" onclick="guardarEventoRapido()">Guardar</button>
     </div>`;
   document.getElementById('modal-overlay').classList.add('active');
+  // Si veníamos de crear un contacto, se restaura lo que ya estaba escrito.
+  const b = window._eventoRapido.borrador;
+  if (b) {
+    document.getElementById('ev-titulo').value = b.titulo || '';
+    document.getElementById('ev-ubicacion').value = b.ubicacion || '';
+    document.getElementById('ev-desc').value = b.desc || '';
+    document.getElementById('ev-categoria').value = b.categoria || 'reuniones';
+    onCambioCategoriaEvento();
+    delete window._eventoRapido.borrador;
+  }
   setTimeout(function() { const t = document.getElementById('ev-titulo'); if (t) t.focus(); }, 100);
 }
 function onCambioCategoriaEvento() {
@@ -980,10 +1118,15 @@ function onCambioCategoriaEvento() {
 }
 function elegirPersonaEvento(p) {
   window._personaElegida = p;
-  document.getElementById('ev-persona-jose').style.background = p === 'Jose' ? 'var(--verde)' : '';
-  document.getElementById('ev-persona-martu').style.background = p === 'Martu' ? 'var(--verde)' : '';
+  document.getElementById('ev-persona-jose').classList.toggle('elegido', p === 'Jose');
+  document.getElementById('ev-persona-martu').classList.toggle('elegido', p === 'Martu');
 }
 /** Buscador sobre la base de clientes: filtra lo ya cargado en memoria, sin ir al servidor. */
+/** Compara nombres sin acentos ni mayúsculas. */
+function _nombreDistinto(a, b) {
+  const n = t => ('' + (t||'')).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/\s+/g,' ').trim();
+  return n(a) !== n(b);
+}
 function buscarClienteEvento(txt) {
   const cont = document.getElementById('ev-cliente-res');
   const q = (txt || '').toLowerCase().trim();
@@ -992,7 +1135,66 @@ function buscarClienteEvento(txt) {
   const res = base.filter(c => (c.nombre || '').toLowerCase().includes(q)).slice(0, 5);
   cont.innerHTML = res.length
     ? res.map(c => `<div class="ev-sug" onclick="elegirClienteEvento('${(c.nombre||'').replace(/'/g,"\\'")}','${c.sheet}',${c.fila})">${esc(c.nombre)}${c.etapa ? ' · ' + esc(c.etapa) : ''}</div>`).join('')
-    : '<div class="ev-sug" style="color:var(--muted)">Sin coincidencias — queda como texto libre.</div>';
+    : `<div class="ev-sug" style="color:var(--lila)" onclick="abrirCrearContactoRapido('${(txt||'').replace(/'/g,"\\'").trim()}')">+ Crear "${esc(txt)}" como contacto nuevo</div>`;
+}
+/** Cuando el nombre escrito no está en la base: se crea el contacto sin salir del evento. */
+const ETAPAS_POR_EMBUDO = {
+  venta: ['Contacto nuevo', 'Búsqueda activa', 'Muestra', 'Reserva', 'Cierre'],
+  captacion: ['Prelisting', 'Presentación de ACM', 'Publicación'],
+  permuta: ['Esperando info', 'Búsqueda permuta', 'Reserva', 'Cierre']
+};
+function abrirCrearContactoRapido(nombre) {
+  // Guardamos lo que ya venía escrito para no perderlo al volver.
+  const t = document.getElementById('ev-titulo'), u = document.getElementById('ev-ubicacion'),
+        d = document.getElementById('ev-desc'), c = document.getElementById('ev-categoria');
+  if (window._eventoRapido) {
+    window._eventoRapido.borrador = {
+      titulo: t ? t.value : '', ubicacion: u ? u.value : '',
+      desc: d ? d.value : '', categoria: c ? c.value : 'reuniones'
+    };
+  }
+  document.getElementById('modal-box').innerHTML = `
+    <div class="modal-title">Contacto nuevo</div>
+    <div class="modal-sub">No estaba en la base. Completá los datos y se crea al toque.</div>
+    <label class="q">Nombre</label><input class="q" id="nc-nombre" value="${esc(nombre)}">
+    <label class="q">Teléfono</label><input class="q" id="nc-tel" inputmode="tel" placeholder="Ej: 3416543249">
+    <label class="q">Embudo</label>
+    <select class="q" id="nc-embudo" onchange="pintarEtapasEmbudo()">
+      <option value="venta">Venta (busca comprar)</option>
+      <option value="captacion">Captación (quiere vender)</option>
+      <option value="permuta">Permuta</option>
+    </select>
+    <label class="q">Estado del pipeline</label>
+    <select class="q" id="nc-etapa"></select>
+    <button class="btn-continuar" onclick="guardarContactoRapido()">Crear contacto</button>
+    <div class="modal-cancelar" onclick="cerrarModal()">Cancelar</div>`;
+  pintarEtapasEmbudo();
+  document.getElementById('modal-overlay').classList.add('active');
+}
+function pintarEtapasEmbudo() {
+  const emb = document.getElementById('nc-embudo').value;
+  document.getElementById('nc-etapa').innerHTML = ETAPAS_POR_EMBUDO[emb].map(e => `<option>${e}</option>`).join('');
+}
+function guardarContactoRapido() {
+  const nombre = document.getElementById('nc-nombre').value.trim();
+  const tel = document.getElementById('nc-tel').value.trim();
+  if (!nombre) { mostrarToast('Falta el nombre.'); return; }
+  if (!tel) { mostrarToast('Falta el teléfono.'); return; }
+  if (_bloqueadoAhora()) return;
+  apiCall('crearContactoRapido', {
+    nombre: nombre, telefono: tel,
+    embudo: document.getElementById('nc-embudo').value,
+    etapa: document.getElementById('nc-etapa').value
+  }).then(function(r) {
+    mostrarToast('✓ ' + r.nombre + ' creado');
+    // Vuelve al cuadro del evento con el cliente ya elegido.
+    cacheVistas.activosCrudo = null; cacheVistas.potencialesCrudo = null;
+    const ev = window._eventoRapido;
+    if (ev) {
+      abrirEventoRapido(ev.inicio, ev.duracion);
+      setTimeout(function() { elegirClienteEvento(r.nombre, r.sheet, r.fila); }, 120);
+    } else { cerrarModal(); }
+  }).catch(mostrarError).finally(_desbloquear);
 }
 function elegirClienteEvento(nombre, sheet, fila) {
   window._eventoRapido.cliente = { nombre: nombre, sheet: sheet, fila: fila };
@@ -1009,19 +1211,45 @@ function guardarEventoRapido() {
   }
   const cli = window._eventoRapido.cliente;
   const textoCliente = document.getElementById('ev-cliente').value.trim();
+  // Si escribió un nombre pero no eligió a nadie de la lista, no lo dejamos pasar como texto suelto.
+  if (textoCliente && (!cli || _nombreDistinto(cli.nombre, textoCliente))) {
+    _desbloquear();
+    if (confirm('"' + textoCliente + '" no está en la base. ¿Lo creamos ahora?')) { abrirCrearContactoRapido(textoCliente); return; }
+    if (_bloqueadoAhora()) return; // siguió sin crearlo: el nombre queda solo en el título
+  }
+  const tituloFinal = titulo + (textoCliente ? ' - ' + textoCliente : '');
+  const inicio = new Date(document.getElementById('ev-fecha').value);
+  const duracion = Number(document.getElementById('ev-dur').value) || 30;
+  const ubicacion = document.getElementById('ev-ubicacion').value.trim();
+  const descripcion = document.getElementById('ev-desc').value.trim();
+  // El evento se ve en la agenda al instante; la creación real viaja atrás.
+  const idProvisorio = 'tmp-' + Date.now();
+  (window._calSnapshot = window._calSnapshot || []).push({
+    id: idProvisorio, titulo: tituloFinal, cliente: textoCliente, ubicacion: ubicacion,
+    inicioISO: inicio.toISOString(), finISO: new Date(inicio.getTime() + duracion * 60000).toISOString(),
+    clase: 'azul', completada: false, sheet: cli ? cli.sheet : null, fila: cli ? cli.fila : null
+  });
+  cerrarModal();
+  pintarVistaActual();
+  mostrarToast('✓ Evento agendado');
   apiCall('crearTareaManual', {
-    titulo: titulo + (textoCliente ? ' - ' + textoCliente : ''),
-    nota: document.getElementById('ev-desc').value.trim(),
-    fecha: new Date(document.getElementById('ev-fecha').value).toISOString(),
-    duracion: Number(document.getElementById('ev-dur').value) || 30,
+    titulo: tituloFinal,
+    nota: descripcion,
+    fecha: inicio.toISOString(),
+    duracion: duracion,
     categoria: cat,
     persona: window._personaElegida,
-    ubicacion: document.getElementById('ev-ubicacion').value.trim(),
+    ubicacion: ubicacion,
     sheet: cli ? cli.sheet : null,
     fila: cli ? cli.fila : null
   }).then(function() {
-    cerrarModal(); mostrarToast('✓ Evento agendado'); refrescarSnapshotYVista();
-  }).catch(mostrarError).finally(_desbloquear);
+    // Se reemplaza el provisorio por el real cuando el calendario responde.
+    refrescarSnapshot().then(pintarVistaActual);
+  }).catch(function(err) {
+    window._calSnapshot = (window._calSnapshot || []).filter(function(e) { return e.id !== idProvisorio; });
+    pintarVistaActual();
+    mostrarError(err);
+  }).finally(_desbloquear);
 }
 function abrirTareaManual(horaSugerida) {
   const def = new Date(diaMostrado);
