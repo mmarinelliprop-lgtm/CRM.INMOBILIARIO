@@ -1211,6 +1211,7 @@ const ETAPAS_POR_EMBUDO = {
   permuta: ['Esperando info', 'Búsqueda permuta', 'Reserva', 'Cierre']
 };
 function abrirCrearContactoRapido(nombre, origen) {
+  window._ncAvisoPropiedad = false; // se pregunta de nuevo en cada alta
   // "origen" indica a qué cuadro volver después de crear: 'evento' (crear evento nuevo) o 'edicion' (editar uno existente).
   window._crearContactoOrigen = origen || 'evento';
   // Guardamos lo que ya venía escrito para no perderlo al volver.
@@ -1250,28 +1251,97 @@ function guardarContactoRapido() {
   if (!nombre) { mostrarToast('Falta el nombre.'); return; }
   if (!tel) { mostrarToast('Falta el teléfono.'); return; }
   if (_bloqueadoAhora()) return;
+  const embudo = document.getElementById('nc-embudo').value;
+  const etapa = document.getElementById('nc-etapa').value;
+  window._ncTmp = { nombre: nombre, tel: tel, embudo: embudo, etapa: etapa };
+  // Antes de crear: ¿ya existe alguien con ese nombre? ¿ya tiene propiedades cargadas?
+  apiCall('chequearAntesDeCrearContacto', { nombre: nombre, telefono: tel }).then(function(chk) {
+    _desbloquear();
+    const co = (chk && chk.coincidencias) || [];
+    if (co.length) { _mostrarPosiblesDuplicados(co); return; }
+    _crearContactoDefinitivo();
+  }).catch(function() { _desbloquear(); _crearContactoDefinitivo(); });
+}
+/** Muestra los clientes que podrían ser la misma persona, para unificar en vez de duplicar. */
+function _mostrarPosiblesDuplicados(coincidencias) {
+  const t = window._ncTmp;
+  const bloques = coincidencias.map(function(c, i) {
+    const props = (c.propiedades || []).map(function(p) {
+      return `<div class="ev-sug" onclick="_usarExistente(${i},${p.fila})">↳ ${esc(p.direccion) || 'Propiedad sin dirección'}${p.etapa ? ' · ' + esc(p.etapa) : ''}</div>`;
+    }).join('');
+    return `<div style="margin-bottom:12px">
+      <div class="ev-sug" onclick="_usarExistente(${i},null)"><b>${esc(c.nombre)}</b>${c.telefono ? ' · ' + esc(c.telefono) : ''}${c.etapa ? ' · ' + esc(c.etapa) : ''}${c.mismoTelefono ? ' <span style="color:var(--verde)">(mismo teléfono)</span>' : ''}</div>
+      ${props ? `<div style="font-size:11px;color:var(--muted);margin:6px 0 2px">Sus propiedades — elegí una si la tarea es sobre esa:</div>${props}` : ''}
+    </div>`;
+  }).join('');
+  window._ncCoincidencias = coincidencias;
+  document.getElementById('modal-box').innerHTML = `
+    <div class="modal-title">¿Es el mismo cliente?</div>
+    <div class="modal-sub">Ya existe alguien con ese nombre. Si es la misma persona, usala en vez de crear otra.</div>
+    ${bloques}
+    <button class="btn-continuar" onclick="_crearContactoDefinitivo()">No, es otra persona — crear nuevo</button>
+    <div class="modal-cancelar" onclick="cerrarModal()">Cancelar</div>`;
+  document.getElementById('modal-overlay').classList.add('active');
+}
+function _usarExistente(indice, filaPropiedad) {
+  if (_bloqueadoAhora()) return;
+  const c = window._ncCoincidencias[indice];
+  const t = window._ncTmp;
+  apiCall('usarContactoExistente', { nombre: c.nombre, telefono: c.telefono || t.tel, etapa: t.etapa, filaPropiedad: filaPropiedad || '' })
+    .then(function(r) {
+      if (r.error) { mostrarToast(r.error); return; }
+      mostrarToast('✓ Vinculado a ' + r.nombre);
+      _volverAlCuadroDeEvento(r);
+    }).catch(mostrarError).finally(_desbloquear);
+}
+function _crearContactoDefinitivo() {
+  if (_bloqueadoAhora()) return;
+  const t = window._ncTmp;
+  // Aviso: el embudo de captación crea además una ficha de propiedad. Si la propiedad
+  // ya existe, conviene vincularla desde la tarjeta en vez de generar una duplicada.
+  if (t.embudo === 'captacion' && !window._ncAvisoPropiedad) {
+    window._ncAvisoPropiedad = true;
+    _desbloquear();
+    document.getElementById('modal-box').innerHTML = `
+      <div class="modal-title">¿Creamos también la propiedad?</div>
+      <div class="modal-sub">El embudo de captación necesita una ficha de propiedad. Si ya la tenés cargada, mejor vinculala desde Captaciones y no la crees acá.</div>
+      <button class="opcion-btn" onclick="_crearContactoDefinitivo()">Sí, crear propiedad nueva<span class="flecha">›</span></button>
+      <button class="opcion-btn" onclick="_crearSoloContacto()">No, solo el contacto (sin propiedad)<span class="flecha">›</span></button>
+      <div class="modal-cancelar" onclick="cerrarModal()">Cancelar</div>`;
+    document.getElementById('modal-overlay').classList.add('active');
+    return;
+  }
   apiCall('crearContactoRapido', {
-    nombre: nombre, telefono: tel,
-    embudo: document.getElementById('nc-embudo').value,
-    etapa: document.getElementById('nc-etapa').value,
+    nombre: t.nombre, telefono: t.tel, embudo: t.embudo, etapa: t.etapa,
     // Queda a nombre del asesor activo; en "Ambos" se asigna a Martu.
     asesor: (window._usuarioActivo && window._usuarioActivo !== 'Ambos') ? window._usuarioActivo : 'Martu'
   }).then(function(r) {
+    window._ncAvisoPropiedad = false;
     mostrarToast('✓ ' + r.nombre + ' creado');
-    // Vuelve al cuadro del evento con el cliente ya elegido.
-    cacheVistas.activosCrudo = null; cacheVistas.potencialesCrudo = null; cacheVistas.captacionesCrudo = null;
-    if (window._crearContactoOrigen === 'edicion' && window._edtEventoId) {
-      const id = window._edtEventoId;
-      abrirEvento(id);
-      setTimeout(function() { elegirClienteEdicion(r.nombre, r.sheet, r.fila); }, 120);
-      return;
-    }
-    const ev = window._eventoRapido;
-    if (ev) {
-      abrirEventoRapido(ev.inicio, ev.duracion);
-      setTimeout(function() { elegirClienteEvento(r.nombre, r.sheet, r.fila); }, 120);
-    } else { cerrarModal(); }
+    _volverAlCuadroDeEvento(r);
   }).catch(mostrarError).finally(_desbloquear);
+}
+/** Crea la persona sin ficha de propiedad (va a Consultas, no a Captaciones). */
+function _crearSoloContacto() {
+  window._ncTmp.embudo = 'venta';
+  window._ncTmp.etapa = 'Contacto nuevo';
+  window._ncAvisoPropiedad = true; // ya se preguntó, no volver a preguntar
+  _crearContactoDefinitivo();
+}
+/** Vuelve al cuadro del evento (nuevo o edición) con el cliente ya elegido. */
+function _volverAlCuadroDeEvento(r) {
+  cacheVistas.activosCrudo = null; cacheVistas.potencialesCrudo = null; cacheVistas.captacionesCrudo = null;
+  if (window._crearContactoOrigen === 'edicion' && window._edtEventoId) {
+    const id = window._edtEventoId;
+    abrirEvento(id);
+    setTimeout(function() { elegirClienteEdicion(r.nombre, r.sheet, r.fila); }, 120);
+    return;
+  }
+  const ev = window._eventoRapido;
+  if (ev) {
+    abrirEventoRapido(ev.inicio, ev.duracion);
+    setTimeout(function() { elegirClienteEvento(r.nombre, r.sheet, r.fila); }, 120);
+  } else { cerrarModal(); }
 }
 function elegirClienteEvento(nombre, sheet, fila) {
   window._eventoRapido.cliente = sheet && fila ? { nombre: nombre, sheet: sheet, fila: fila } : null;
