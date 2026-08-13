@@ -661,7 +661,22 @@ function pintarHeaderBtns(v) {
   const cont = document.getElementById('header-btns');
   cont.innerHTML = v === 'agenda' ? `<button class="header-btn" onclick="abrirQuiz()">🎯 Prefs</button><button class="header-btn" onclick="abrirTareaManual()">✎ Nueva</button>` : '';
 }
-function cerrarModal() { document.getElementById('modal-overlay').classList.remove('active'); }
+function cerrarModal() {
+  document.getElementById('modal-overlay').classList.remove('active');
+  // Red de seguridad universal: si el cuadro se cierra después de marcar una tarea como
+  // hecha (sea cual sea el camino que tomó el flujo), se verifica que el cliente haya
+  // quedado con algo agendado. Se vuelve a chequear contra el calendario ya actualizado,
+  // así que si SÍ se agendó algo en el medio, no molesta — solo avisa si de verdad quedó vacío.
+  if (window._chequeoPendienteEventId) {
+    const id = window._chequeoPendienteEventId;
+    window._chequeoPendienteEventId = null;
+    apiCall('getMetaDeEvento', { eventId: id }).then(function(m) {
+      if (!m || !m.sheet || !m.fila) return; // tarea manual sin cliente: no aplica
+      if (['Perdido', 'Ganado', 'Descartado', 'Cierre', 'Cerrado ganado'].indexOf(m.etapa) !== -1) return; // ya no está activo
+      refrescarSnapshot().then(function() { _chequearSinTareaSiguiente(m.sheet, m.fila, m.cliente, m.etapa); });
+    }).catch(() => {});
+  }
+}
 let _toastTimer = null;
 /** Aviso chico no bloqueante (reemplaza a los mostrarToast(), que congelaban toda la app). */
 function mostrarToast(txt) {
@@ -924,27 +939,46 @@ function abrirEvento(id) {
   document.getElementById('modal-overlay').classList.add('active');
 }
 /** Buscador de cliente dentro de la edición: cambia a quién apunta el evento (o lo deja como texto libre). */
-function buscarClienteEdicion(txt) {
-  const cont = document.getElementById('edt-cliente-res');
-  const q = (txt || '').toLowerCase().trim();
-  window._edtCliente = null; // hasta que elija uno de la lista, queda como texto libre
+/**
+ * Buscador de cliente único (una fila por persona en la base, aunque tenga varias
+ * propiedades captadas). "onElegir" recibe (nombre, sheet, fila) ya resuelto —
+ * si la persona tiene más de una propiedad, antes pregunta cuál.
+ */
+function _buscarClienteUnico(txt, idInput, idResultados, onElegir, onCrear) {
+  const cont = document.getElementById(idResultados);
+  const q = (txt || '').trim();
   if (q.length < 2) { cont.innerHTML = ''; return; }
   cont.innerHTML = '<div class="ev-sug" style="color:var(--muted)">Buscando…</div>';
-  // Si las listas todavía no se cargaron en esta sesión, se traen ahora (antes buscaba sobre vacío y decía "sin coincidencias" aunque el cliente existiera).
-  const traerActivos = cacheVistas.activosCrudo ? Promise.resolve(cacheVistas.activosCrudo) : apiCall('getClientesActivos', { filtro: '' }).then(r => { cacheVistas.activosCrudo = r; return r; });
-  const traerPotenciales = cacheVistas.potencialesCrudo ? Promise.resolve(cacheVistas.potencialesCrudo) : apiCall('getPotencialesCrudo').then(r => { cacheVistas.potencialesCrudo = r; return r; });
-  Promise.all([traerActivos, traerPotenciales]).then(function(listas) {
-    if (document.getElementById('edt-cliente').value.trim().toLowerCase() !== q) return; // siguió escribiendo, esta búsqueda ya no aplica
-    const base = listas[0].concat(listas[1]);
-    const res = base.filter(c => (c.nombre || '').toLowerCase().includes(q)).slice(0, 5);
+  apiCall('buscarClienteUnico', { q: q }).then(function(res) {
+    if ((document.getElementById(idInput).value || '').trim() !== q) return; // siguió escribiendo
     cont.innerHTML = res.length
-      ? res.map(c => `<div class="ev-sug" onclick="elegirClienteEdicion('${(c.nombre||'').replace(/'/g,"\\'")}','${c.sheet}',${c.fila})">${esc(c.nombre)}${c.etapa ? ' · ' + esc(c.etapa) : ''}</div>`).join('')
-        + `<div class="ev-sug" style="color:var(--lila)" onclick="abrirCrearContactoRapido('${txt.replace(/'/g,"\\'")}','edicion')">+ Crear "${esc(txt)}" como contacto nuevo</div>`
-      : `<div class="ev-sug" style="color:var(--lila)" onclick="abrirCrearContactoRapido('${txt.replace(/'/g,"\\'")}','edicion')">+ No está en la base — crear "${esc(txt)}"</div>`;
+      ? res.map(c => `<div class="ev-sug" onclick="_elegirClienteUnico('${(c.nombre||'').replace(/'/g,"\\'")}','${(c.telefono||'')}','${idInput}','${idResultados}','${onElegir}')">${esc(c.nombre)}${c.etapa ? ' · ' + esc(c.etapa) : ''}</div>`).join('')
+        + (onCrear ? `<div class="ev-sug" style="color:var(--lila)" onclick="${onCrear}('${q.replace(/'/g,"\\'")}')">+ Crear "${esc(q)}" como contacto nuevo</div>` : '')
+      : (onCrear ? `<div class="ev-sug" style="color:var(--lila)" onclick="${onCrear}('${q.replace(/'/g,"\\'")}')">+ No está en la base — crear "${esc(q)}"</div>` : '<div class="ev-sug" style="color:var(--muted)">Sin coincidencias.</div>');
   }).catch(function() { cont.innerHTML = '<div class="ev-sug" style="color:var(--muted)">No pude buscar — probá de nuevo.</div>'; });
 }
+/** El nombre de la función a llamar viaja como string en el HTML de arriba; acá se ejecuta de verdad. */
+function _elegirClienteUnico(nombre, telefono, idInput, idResultados, onElegirFn) {
+  document.getElementById(idInput).value = nombre;
+  const cont = document.getElementById(idResultados);
+  cont.innerHTML = '<div class="ev-sug" style="color:var(--muted)">Cargando…</div>';
+  apiCall('resolverFilasCliente', { nombre: nombre, telefono: telefono }).then(function(r) {
+    const props = r.propiedades || [];
+    if (props.length > 1) {
+      cont.innerHTML = '<div class="ev-sug" style="color:var(--muted)">Tiene varias propiedades — ¿sobre cuál es esto?</div>'
+        + props.map(p => `<div class="ev-sug" onclick="${onElegirFn}('${nombre.replace(/'/g,"\\'")}','CAPTACIONES',${p.fila});document.getElementById('${idResultados}').innerHTML=''">${esc(p.direccion) || 'Propiedad sin dirección'}${p.etapa ? ' · ' + esc(p.etapa) : ''}</div>`).join('')
+        + (r.consulta ? `<div class="ev-sug" onclick="${onElegirFn}('${nombre.replace(/'/g,"\\'")}','${r.consulta.sheet}',${r.consulta.fila});document.getElementById('${idResultados}').innerHTML=''">Sobre su búsqueda (no una propiedad puntual)</div>` : '');
+      return;
+    }
+    const dest = props[0] ? { sheet: 'CAPTACIONES', fila: props[0].fila } : r.consulta;
+    cont.innerHTML = '';
+    window[onElegirFn](nombre, dest ? dest.sheet : null, dest ? dest.fila : null);
+  }).catch(mostrarError);
+}
+function buscarClienteEdicion(txt) { _buscarClienteUnico(txt, 'edt-cliente', 'edt-cliente-res', 'elegirClienteEdicion', "abrirCrearContactoRapidoEdicion"); }
+function abrirCrearContactoRapidoEdicion(nombre) { abrirCrearContactoRapido(nombre, 'edicion'); }
 function elegirClienteEdicion(nombre, sheet, fila) {
-  window._edtCliente = { sheet: sheet, fila: fila, nombre: nombre };
+  window._edtCliente = sheet && fila ? { sheet: sheet, fila: fila, nombre: nombre } : null;
   document.getElementById('edt-cliente').value = nombre;
   document.getElementById('edt-cliente-res').innerHTML = '';
 }
@@ -1171,20 +1205,8 @@ function _nombreDistinto(a, b) {
   return n(a) !== n(b);
 }
 function buscarClienteEvento(txt) {
-  const cont = document.getElementById('ev-cliente-res');
-  const q = (txt || '').toLowerCase().trim();
-  if (q.length < 2) { cont.innerHTML = ''; window._eventoRapido.cliente = null; return; }
-  cont.innerHTML = '<div class="ev-sug" style="color:var(--muted)">Buscando…</div>';
-  const traerActivos = cacheVistas.activosCrudo ? Promise.resolve(cacheVistas.activosCrudo) : apiCall('getClientesActivos', { filtro: '' }).then(r => { cacheVistas.activosCrudo = r; return r; });
-  const traerPotenciales = cacheVistas.potencialesCrudo ? Promise.resolve(cacheVistas.potencialesCrudo) : apiCall('getPotencialesCrudo').then(r => { cacheVistas.potencialesCrudo = r; return r; });
-  Promise.all([traerActivos, traerPotenciales]).then(function(listas) {
-    if (document.getElementById('ev-cliente').value.trim().toLowerCase() !== q) return;
-    const base = listas[0].concat(listas[1]);
-    const res = base.filter(c => (c.nombre || '').toLowerCase().includes(q)).slice(0, 5);
-    cont.innerHTML = res.length
-      ? res.map(c => `<div class="ev-sug" onclick="elegirClienteEvento('${(c.nombre||'').replace(/'/g,"\\'")}','${c.sheet}',${c.fila})">${esc(c.nombre)}${c.etapa ? ' · ' + esc(c.etapa) : ''}</div>`).join('')
-      : `<div class="ev-sug" style="color:var(--lila)" onclick="abrirCrearContactoRapido('${(txt||'').replace(/'/g,"\\'").trim()}')">+ Crear "${esc(txt)}" como contacto nuevo</div>`;
-  }).catch(function() { cont.innerHTML = '<div class="ev-sug" style="color:var(--muted)">No pude buscar — probá de nuevo.</div>'; });
+  if (!txt || txt.trim().length < 2) { document.getElementById('ev-cliente-res').innerHTML = ''; window._eventoRapido.cliente = null; return; }
+  _buscarClienteUnico(txt, 'ev-cliente', 'ev-cliente-res', 'elegirClienteEvento', 'abrirCrearContactoRapido');
 }
 /** Cuando el nombre escrito no está en la base: se crea el contacto sin salir del evento. */
 const ETAPAS_POR_EMBUDO = {
@@ -1256,7 +1278,7 @@ function guardarContactoRapido() {
   }).catch(mostrarError).finally(_desbloquear);
 }
 function elegirClienteEvento(nombre, sheet, fila) {
-  window._eventoRapido.cliente = { nombre: nombre, sheet: sheet, fila: fila };
+  window._eventoRapido.cliente = sheet && fila ? { nombre: nombre, sheet: sheet, fila: fila } : null;
   document.getElementById('ev-cliente').value = nombre;
   document.getElementById('ev-cliente-res').innerHTML = '';
 }
@@ -1395,6 +1417,7 @@ function guardarQuiz() {
 let eventoActivoId = null;
 function marcarHecho(id) {
   eventoActivoId = id;
+  window._chequeoPendienteEventId = id; // se verifica al cerrar el cuadro (ver cerrarModal)
   apiCall('iniciarCompletarTarea', { eventId: id }).then(manejarResultado).catch(mostrarError);
 }
 /** Marca/desmarca un evento en el snapshot local y repinta al instante (el refresh real corre atrás). */
@@ -1407,13 +1430,14 @@ function manejarResultado(r) {
   if (r.tipo === 'ya_completada') { abrirDeshacer(); return; }
   if (r.tipo === 'completada_simple' || r.tipo === 'ok_simple') {
     // Se ve tildada al instante; el snapshot real se refresca en segundo plano.
+    // (La verificación de "quedó sin tarea" corre sola al cerrar el cuadro — ver cerrarModal.)
     _marcarEventoLocal(eventoActivoId, true);
-    refrescarSnapshot().then(pintarVistaActual).then(function() { _chequearSinTareaSiguiente(r.sheet, r.fila, r.cliente); }).catch(() => {});
+    refrescarSnapshot().then(pintarVistaActual).catch(() => {});
     return;
   }
   if (r.tipo === 'terminal') {
     _marcarEventoLocal(eventoActivoId, true);
-    refrescarSnapshot().then(pintarVistaActual).then(function() { chequearSinTarea(); _chequearSinTareaSiguiente(r.sheet, r.fila, r.cliente); });
+    refrescarSnapshot().then(pintarVistaActual).then(function() { chequearSinTarea(); });
     return;
   }
   if (r.tipo === 'links') { abrirPasoLinks(); return; }
@@ -1435,18 +1459,43 @@ function manejarResultado(r) {
  * crear la próxima tarea (marcar hecho, completar un paso, resultado del ACM, etc.).
  * Si de verdad no le queda nada agendado, ofrece agendar libre o ubicarlo en el workflow.
  */
-function _chequearSinTareaSiguiente(sheet, fila, cliente) {
+function _chequearSinTareaSiguiente(sheet, fila, cliente, etapa) {
   if (!sheet || !fila) return;
   const tieneTarea = (window._calSnapshot || []).some(function(ev) {
     return ev.sheet === sheet && Number(ev.fila) === Number(fila) && !ev.completada;
   });
   if (tieneTarea) return;
+  const esEtapaFinal = ['Reserva', 'Escritura'].indexOf(etapa) !== -1;
   document.getElementById('modal-box').innerHTML = `
     <div class="modal-title">${esc(cliente) || 'Este contacto'} quedó sin tarea agendada</div>
-    <div class="modal-sub">Para que no se pierda del seguimiento, agendale algo ahora.</div>
-    <button class="opcion-btn" onclick="abrirAgendarTarea('${sheet}',${fila},'${(cliente||'').replace(/'/g,"\\'")}')">Agendar<span class="flecha">›</span></button>
+    <div class="modal-sub">Para que no se pierda del seguimiento, elegí qué hacemos.</div>
+    <button class="opcion-btn" onclick="abrirAgendarTarea('${sheet}',${fila},'${(cliente||'').replace(/'/g,"\\'")}','${(etapa||'').replace(/'/g,"\\'")}')">Agendar<span class="flecha">›</span></button>
+    ${esEtapaFinal ? `<button class="opcion-btn" onclick="abrirCerrarCliente('${sheet}',${fila},'${(cliente||'').replace(/'/g,"\\'")}')">Cerrar cliente<span class="flecha">›</span></button>` : ''}
     <div class="modal-cancelar" onclick="cerrarModal()">Ahora no</div>`;
   document.getElementById('modal-overlay').classList.add('active');
+}
+/** Cierre de un cliente en etapa final (Reserva/Escritura): pide los datos y pasa a Cierre. */
+function abrirCerrarCliente(sheet, fila, cliente) {
+  document.getElementById('modal-box').innerHTML = `
+    <div class="modal-title">Cerrar — ${esc(cliente)}</div>
+    <label class="q">Fecha de cierre</label><input type="date" class="q" id="cc-fecha" value="${new Date().toISOString().slice(0,10)}">
+    <label class="q">Monto final (opcional)</label><input class="q" id="cc-monto" placeholder="Ej: 85000">
+    <label class="q">Observación</label><textarea class="q" id="cc-obs" rows="2" placeholder="Ej: escrituró el 20/08, todo ok"></textarea>
+    <button class="btn-continuar" onclick="confirmarCerrarCliente('${sheet}',${fila})">Confirmar cierre</button>
+    <div class="modal-cancelar" onclick="cerrarModal()">Cancelar</div>`;
+  document.getElementById('modal-overlay').classList.add('active');
+}
+function confirmarCerrarCliente(sheet, fila) {
+  if (_bloqueadoAhora()) return;
+  const etapaFinal = sheet === 'CAPTACIONES' ? 'Cerrado ganado' : 'Cierre';
+  const datos = {
+    fecha: document.getElementById('cc-fecha').value,
+    monto: document.getElementById('cc-monto').value.trim(),
+    obs: document.getElementById('cc-obs').value.trim()
+  };
+  apiCall('cerrarClienteFinal', { sheet: sheet, fila: fila, etapa: etapaFinal, fecha: datos.fecha, monto: datos.monto, obs: datos.obs })
+    .then(function() { cerrarModal(); mostrarToast('✓ Cerrado'); cacheVistas.activosCrudo = null; cacheVistas.captacionesCrudo = null; })
+    .catch(mostrarError).finally(_desbloquear);
 }
 // ---- Cadena de preguntas del workflow de captación (Prelisting → ACM → Fotos → Publicada) ----
 function abrirCaptacionSiNo(r) {
@@ -1504,18 +1553,9 @@ function abrirCaptacionConfirmarSimple(r) {
   document.getElementById('modal-overlay').classList.add('active');
 }
 function responderCaptacionConfirmarSimple(val) {
-  cerrarModal();
-  if (!val) {
-    // Si declina el reporte (u otra acción de un solo botón) y la propiedad sigue activa,
-    // no puede quedar sin nada agendado.
-    refrescarSnapshotYVista();
-    apiCall('getMetaDeEvento', { eventId: eventoActivoId }).then(function(m) {
-      if (m && m.fila) _chequearSinTareaSiguiente(m.sheet, m.fila, m.cliente);
-    }).catch(() => {});
-    return;
-  }
+  if (!val) { cerrarModal(); refrescarSnapshotYVista(); return; } // cerrarModal ya dispara la verificación universal
   apiCall('confirmarAccionSimpleCaptacion', { eventId: eventoActivoId, paso: window._captacionPaso })
-    .then(function() { mostrarToast('✓ Reporte agendado'); refrescarSnapshotYVista(); }).catch(mostrarError);
+    .then(function() { cerrarModal(); mostrarToast('✓ Reporte agendado'); refrescarSnapshotYVista(); }).catch(mostrarError);
 }
 function abrirDeshacer() {
   document.getElementById('modal-box').innerHTML = `
@@ -2702,19 +2742,20 @@ function deshacerNoPublicaClick(fila) { toggleBajaCaptacion(fila, false); }
 function abrirEditarCaptacion(fila) {
   const i = (cacheVistas.captacionesCrudo || []).find(x => x.fila === fila);
   if (!i) return;
+  const s = v => ('' + (v === null || v === undefined ? '' : v)).replace(/"/g, '&quot;'); // a texto seguro, aunque venga como número
   document.getElementById('modal-box').innerHTML = `
     <div class="modal-title">Editar captación</div>
-    <label class="q">Dirección</label><input class="q" id="ed-DIRECCION" value="${(i.direccion||'').replace(/"/g,'&quot;')}">
-    <label class="q">Tipo</label><input class="q" id="ed-TIPO" value="${(i.tipo||'').replace(/"/g,'&quot;')}">
-    <label class="q">Lugar/Barrio</label><input class="q" id="ed-LUGAR" value="${(i.lugar||'').replace(/"/g,'&quot;')}">
-    <label class="q">Fotos</label><input class="q" id="ed-FOTOS" value="${(i.fotos||'').replace(/"/g,'&quot;')}">
-    <label class="q">Fecha de inicio</label><input class="q" id="ed-FECHA_DE_INICIO" value="${(i.fechaInicio||'').replace(/"/g,'&quot;')}">
-    <label class="q">Propietario</label><input class="q" id="ed-PROPIETARIO" value="${(i.propietario||'').replace(/"/g,'&quot;')}">
-    <label class="q">Valor estimado</label><input class="q" id="ed-VALOR_ESTIMADO" value="${(i.valorEstimado||'').replace(/"/g,'&quot;')}">
-    <label class="q">Autorización</label><input class="q" id="ed-AUTORIZACION" value="${(i.autorizacion||'').replace(/"/g,'&quot;')}">
-    <label class="q">Escritura</label><input class="q" id="ed-ESCRITURA" value="${(i.escritura||'').replace(/"/g,'&quot;')}">
-    <label class="q">Impuestos</label><input class="q" id="ed-IMPUESTOS" value="${(i.impuestos||'').replace(/"/g,'&quot;')}">
-    <label class="q">Observación</label><textarea class="q" id="ed-OBSERVACION" rows="2">${i.observacion||''}</textarea>
+    <label class="q">Dirección</label><input class="q" id="ed-DIRECCION" value="${s(i.direccion)}">
+    <label class="q">Tipo</label><input class="q" id="ed-TIPO" value="${s(i.tipo)}">
+    <label class="q">Lugar/Barrio</label><input class="q" id="ed-LUGAR" value="${s(i.lugar)}">
+    <label class="q">Fotos</label><input class="q" id="ed-FOTOS" value="${s(i.fotos)}">
+    <label class="q">Fecha de inicio</label><input class="q" id="ed-FECHA_DE_INICIO" value="${s(i.fechaInicio)}">
+    <label class="q">Propietario</label><input class="q" id="ed-PROPIETARIO" value="${s(i.propietario)}">
+    <label class="q">Valor estimado</label><input class="q" id="ed-VALOR_ESTIMADO" value="${s(i.valorEstimado)}">
+    <label class="q">Autorización</label><input class="q" id="ed-AUTORIZACION" value="${s(i.autorizacion)}">
+    <label class="q">Escritura</label><input class="q" id="ed-ESCRITURA" value="${s(i.escritura)}">
+    <label class="q">Impuestos</label><input class="q" id="ed-IMPUESTOS" value="${s(i.impuestos)}">
+    <label class="q">Observación</label><textarea class="q" id="ed-OBSERVACION" rows="2">${s(i.observacion)}</textarea>
     <button class="btn-continuar" onclick="guardarEditarCaptacion(${fila})">Guardar</button>
     <div class="modal-cancelar" onclick="cerrarModal()">Cancelar</div>`;
   document.getElementById('modal-overlay').classList.add('active');
