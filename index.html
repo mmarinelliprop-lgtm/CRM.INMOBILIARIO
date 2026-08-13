@@ -118,8 +118,7 @@
   .top-toggle-btn { flex:1; text-align:center; padding:10px 0; font-size:13px; font-weight:700; color:var(--muted); border-radius:10px; cursor:pointer; }
   .top-toggle-btn.active { background:var(--verde); color:#062b23; }
   .funnel-label { font-size:11px; font-weight:800; color:var(--muted); text-transform:uppercase; letter-spacing:.5px; margin:16px 2px 8px; }
-  .grupo-mayor { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:12px; margin-bottom:12px; }
-  .grupo-mayor-title { font-size:11.5px; font-weight:800; letter-spacing:.5px; color:var(--muted); text-transform:uppercase; margin:2px 4px 10px; }
+  .cliente-tag { display:inline-block; font-size:9px; font-weight:800; letter-spacing:.3px; text-transform:uppercase; padding:2px 6px; border-radius:6px; margin-right:6px; vertical-align:middle; }
   .grupo { border-radius:14px; margin-bottom:8px; overflow:hidden; }
   .grupo-head { display:flex; align-items:center; justify-content:space-between; padding:13px 14px; cursor:pointer; font-weight:800; font-size:13.5px; color:#fff; text-shadow:0 1px 2px rgba(0,0,0,.25); }
   .grupo-head .chev { transition:transform .15s; }
@@ -905,12 +904,14 @@ function abrirEvento(id) {
   if (!ev) return;
   const inicio = new Date(ev.inicioISO);
   const dur = Math.round((new Date(ev.finISO) - inicio) / 60000);
+  window._edtCliente = ev.sheet && ev.fila ? { sheet: ev.sheet, fila: ev.fila, nombre: ev.cliente } : null;
   document.getElementById('modal-box').innerHTML = `
     <input class="ev-titulo" id="edt-titulo" value="${esc(ev.titulo)}">
     <div class="ev-row"><span class="ev-ico">🕐</span><input type="datetime-local" id="edt-fecha" value="${toDatetimeLocal(inicio)}">
       <input type="number" id="edt-dur" value="${dur}" min="15" step="15"></div>
     <div class="ev-row"><span class="ev-ico">📍</span><input id="edt-ubicacion" value="${esc(ev.ubicacion || '')}" placeholder="Agregar ubicación"></div>
-    ${ev.cliente ? `<div class="ev-row"><span class="ev-ico">👤</span><span style="font-size:13px">${esc(ev.cliente)}</span></div>` : ''}
+    <div class="ev-row"><span class="ev-ico">👤</span><input id="edt-cliente" value="${esc(ev.cliente || '')}" placeholder="Agregar cliente" oninput="buscarClienteEdicion(this.value)" autocomplete="off"></div>
+    <div id="edt-cliente-res"></div>
     ${ev.completada
       ? `<button class="btn-continuar" style="background:var(--card-2);color:var(--text)" onclick="cerrarModal();abrirDeshacerDe('${id}')">↩ Deshacer (está marcada como hecha)</button>`
       : `<button class="btn-continuar" onclick="cerrarModal();marcarHecho('${id}')">✓ Marcar hecha</button>`}
@@ -920,21 +921,52 @@ function abrirEvento(id) {
     </div>`;
   document.getElementById('modal-overlay').classList.add('active');
 }
+/** Buscador de cliente dentro de la edición: cambia a quién apunta el evento (o lo deja como texto libre). */
+function buscarClienteEdicion(txt) {
+  const cont = document.getElementById('edt-cliente-res');
+  const q = (txt || '').toLowerCase().trim();
+  window._edtCliente = null; // hasta que elija uno de la lista, queda como texto libre
+  if (q.length < 2) { cont.innerHTML = ''; return; }
+  const base = (cacheVistas.activosCrudo || []).concat(cacheVistas.potencialesCrudo || []);
+  const res = base.filter(c => (c.nombre || '').toLowerCase().includes(q)).slice(0, 5);
+  cont.innerHTML = res.length
+    ? res.map(c => `<div class="ev-sug" onclick="elegirClienteEdicion('${(c.nombre||'').replace(/'/g,"\\'")}','${c.sheet}',${c.fila})">${esc(c.nombre)}${c.etapa ? ' · ' + esc(c.etapa) : ''}</div>`).join('')
+    : '<div class="ev-sug" style="color:var(--muted)">Sin coincidencias — queda como texto libre.</div>';
+}
+function elegirClienteEdicion(nombre, sheet, fila) {
+  window._edtCliente = { sheet: sheet, fila: fila, nombre: nombre };
+  document.getElementById('edt-cliente').value = nombre;
+  document.getElementById('edt-cliente-res').innerHTML = '';
+}
 function abrirDeshacerDe(id) { eventoActivoId = id; abrirDeshacer(); }
 function guardarEdicionEvento(id) {
   if (_bloqueadoAhora()) return;
+  const ev = (window._calSnapshot || []).find(e => e.id === id);
+  const clienteTextoActual = document.getElementById('edt-cliente').value.trim();
+  const clienteCambio = window._edtCliente
+    ? (!ev || ev.sheet !== window._edtCliente.sheet || Number(ev.fila) !== Number(window._edtCliente.fila))
+    : (clienteTextoActual !== (ev ? (ev.cliente || '') : ''));
   const datos = {
     titulo: document.getElementById('edt-titulo').value.trim(),
     fecha: new Date(document.getElementById('edt-fecha').value).toISOString(),
     duracion: Number(document.getElementById('edt-dur').value) || 30,
     ubicacion: document.getElementById('edt-ubicacion').value.trim()
   };
+  if (clienteCambio) {
+    datos.cambiarCliente = true;
+    if (window._edtCliente) { datos.sheet = window._edtCliente.sheet; datos.fila = window._edtCliente.fila; }
+    else datos.clienteTexto = clienteTextoActual;
+  }
   // Se ve el cambio al instante; la escritura viaja atrás.
-  const ev = (window._calSnapshot || []).find(e => e.id === id);
   if (ev) {
     ev.titulo = datos.titulo; ev.ubicacion = datos.ubicacion;
     ev.inicioISO = datos.fecha;
     ev.finISO = new Date(new Date(datos.fecha).getTime() + datos.duracion * 60000).toISOString();
+    if (clienteCambio) {
+      ev.cliente = window._edtCliente ? window._edtCliente.nombre : clienteTextoActual;
+      ev.sheet = window._edtCliente ? window._edtCliente.sheet : null;
+      ev.fila = window._edtCliente ? window._edtCliente.fila : null;
+    }
   }
   cerrarModal(); pintarVistaActual(); mostrarToast('✓ Guardado');
   apiCall('actualizarEvento', { eventId: id, datos: datos })
@@ -1839,9 +1871,9 @@ function abrirGrupo(etapa) {
   _grupoAbierto = (_grupoAbierto === etapa) ? null : etapa;
   if (cacheVistas.activos) renderizarActivos(cacheVistas.activos);
 }
-// Pipeline agrupado: Nuevo contacto / Compradores / Propietarios / Permuta / Reserva / Escritura.
-// Los cerrados (Ganado, Descartado, Cierre, Cerrado ganado) ya vienen excluidos desde el servidor:
-// el dato queda guardado para medir, pero desaparece de esta vista.
+// Pipeline agrupado: 6 boxes en total (Nuevo contacto, Compradores, Propietarios, Permuta,
+// Reserva, Escritura). El subestado (Búsqueda/Muestra/ACM/etc) se muestra como etiqueta chica
+// en cada contacto, no como una pestaña aparte — así no se llena de acordeones.
 const PIPELINE_GRUPOS = [
   { titulo: 'Nuevo contacto', color: '#D9823E', filtro: c => c.etapa === 'Contacto nuevo' },
   { titulo: 'Compradores', subs: [
@@ -1863,27 +1895,33 @@ const PIPELINE_GRUPOS = [
   { titulo: 'Reserva', color: '#9B2FF2', filtro: c => c.etapa === 'Reserva' },
   { titulo: 'Escritura', color: '#F62FE8', filtro: c => c.etapa === 'Escritura' }
 ];
-function _filaClienteHtml(c) {
+function _filaClienteHtml(c, tagTitulo, tagColor) {
+  const tag = tagTitulo ? `<span class="cliente-tag" style="background:${tagColor}22;color:${tagColor};border:1px solid ${tagColor}55">${esc(tagTitulo)}</span>` : '';
   return `<div class="cliente-row" onclick="abrirPerfil('${c.sheet}', ${c.fila})">
-    <div style="flex:1"><div class="cliente-nombre">${esc(c.nombre)}${c.propiedad ? ' <span style="color:var(--muted);font-weight:500;font-size:10.5px">· ' + esc(c.propiedad) + '</span>' : ''}${c.asesor ? ' <span style="color:var(--muted);font-weight:500;font-size:10.5px">· ' + c.asesor + '</span>' : ''}</div><div class="cliente-tarea">${esc(c.proximaTarea)}${c.proximaFechaISO ? ' · ' + new Date(c.proximaFechaISO).toLocaleDateString('es-AR',{day:'2-digit',month:'2-digit'}) : ''}</div></div>
+    <div style="flex:1"><div class="cliente-nombre">${tag}${esc(c.nombre)}${c.propiedad ? ' <span style="color:var(--muted);font-weight:500;font-size:10.5px">· ' + esc(c.propiedad) + '</span>' : ''}${c.asesor ? ' <span style="color:var(--muted);font-weight:500;font-size:10.5px">· ' + c.asesor + '</span>' : ''}</div><div class="cliente-tarea">${esc(c.proximaTarea)}${c.proximaFechaISO ? ' · ' + new Date(c.proximaFechaISO).toLocaleDateString('es-AR',{day:'2-digit',month:'2-digit'}) : ''}</div></div>
     <div class="cliente-actions"><button class="icon-btn" onclick="event.stopPropagation();abrirWhatsapp('${c.telefono}')">💬</button></div>
   </div>`;
 }
-function _subgrupoHtml(clave, titulo, color, items) {
-  const filas = items.map(_filaClienteHtml).join('') || '<div class="loading" style="padding:8px 4px">Sin clientes acá.</div>';
-  return `<div class="grupo${_grupoAbierto === clave ? ' abierto' : ''}" style="background:${color}"><div class="grupo-head" onclick="abrirGrupo('${clave.replace(/'/g,"\\'")}')"><span>${titulo} (${items.length})</span><span class="chev">⌄</span></div><div class="grupo-body">${filas}</div></div>`;
+function _grupoHtml(clave, titulo, color, filas, cantidad) {
+  return `<div class="grupo${_grupoAbierto === clave ? ' abierto' : ''}" style="background:${color}"><div class="grupo-head" onclick="abrirGrupo('${clave.replace(/'/g,"\\'")}')"><span>${titulo} (${cantidad})</span><span class="chev">⌄</span></div><div class="grupo-body">${filas}</div></div>`;
 }
 function renderizarActivos(clientes) {
   document.getElementById('grupos-activos').innerHTML = PIPELINE_GRUPOS.map(function(g) {
     if (g.subs) {
-      const cuerpos = g.subs.map(function(s) {
+      // Un solo box para todo el grupo mayor; el subestado va como etiqueta en cada fila,
+      // y las filas quedan ordenadas por ese subestado (el orden en que están definidos).
+      let filas = '', total = 0;
+      g.subs.forEach(function(s) {
         const items = clientes.filter(s.filtro);
-        return _subgrupoHtml(g.titulo + '>' + s.titulo, s.titulo, s.color, items);
-      }).join('');
-      return `<div class="grupo-mayor"><div class="grupo-mayor-title">${g.titulo}</div>${cuerpos}</div>`;
+        total += items.length;
+        filas += items.map(c => _filaClienteHtml(c, s.titulo, s.color)).join('');
+      });
+      if (!total) filas = '<div class="loading" style="padding:8px 4px">Sin clientes acá.</div>';
+      return _grupoHtml(g.titulo, g.titulo, g.subs[0].color, filas, total);
     }
     const items = clientes.filter(g.filtro);
-    return `<div class="grupo-mayor">${_subgrupoHtml(g.titulo, g.titulo, g.color, items)}</div>`;
+    const filas = items.map(c => _filaClienteHtml(c)).join('') || '<div class="loading" style="padding:8px 4px">Sin clientes acá.</div>';
+    return _grupoHtml(g.titulo, g.titulo, g.color, filas, items.length);
   }).join('');
 }
 function abrirWhatsapp(tel) { window.open('https://wa.me/54' + (tel || '').replace(/\D/g,''), '_blank'); }
