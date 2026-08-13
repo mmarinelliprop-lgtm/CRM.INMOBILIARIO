@@ -671,10 +671,15 @@ function cerrarModal() {
     const id = window._chequeoPendienteEventId;
     window._chequeoPendienteEventId = null;
     apiCall('getMetaDeEvento', { eventId: id }).then(function(m) {
-      if (!m || !m.sheet || !m.fila) return; // tarea manual sin cliente: no aplica
-      if (['Perdido', 'Ganado', 'Descartado', 'Cierre', 'Cerrado ganado'].indexOf(m.etapa) !== -1) return; // ya no está activo
+      if (!m || !m.cliente) return; // tarea sin ningún nombre de cliente: no aplica
+      if (m.etapa && ['Perdido', 'Ganado', 'Descartado', 'Cierre', 'Cerrado ganado'].indexOf(m.etapa) !== -1) return; // ya no está activo
       refrescarSnapshot().then(function() { _chequearSinTareaSiguiente(m.sheet, m.fila, m.cliente, m.etapa); });
-    }).catch(() => {});
+    }).catch(function(err) {
+      // Si esto falla (ej: el backend publicado no tiene esta acción todavía), se avisa
+      // en vez de tragárselo en silencio — antes esto podía ocultar que faltaba redeployar.
+      mostrarToast('⚠️ No pude verificar si quedó sin tarea agendada (revisá que el Apps Script esté actualizado).');
+      console.error('chequeo sin tarea:', err);
+    });
   }
 }
 let _toastTimer = null;
@@ -1462,19 +1467,31 @@ function manejarResultado(r) {
  * Si de verdad no le queda nada agendado, ofrece agendar libre o ubicarlo en el workflow.
  */
 function _chequearSinTareaSiguiente(sheet, fila, cliente, etapa) {
-  if (!sheet || !fila) return;
+  if (!cliente) return;
   const tieneTarea = (window._calSnapshot || []).some(function(ev) {
-    return ev.sheet === sheet && Number(ev.fila) === Number(fila) && !ev.completada;
+    return !ev.completada && (sheet && fila ? (ev.sheet === sheet && Number(ev.fila) === Number(fila)) : ev.cliente === cliente);
   });
   if (tieneTarea) return;
   const esEtapaFinal = ['Reserva', 'Escritura'].indexOf(etapa) !== -1;
+  const vinculado = sheet && fila;
   document.getElementById('modal-box').innerHTML = `
-    <div class="modal-title">${esc(cliente) || 'Este contacto'} quedó sin tarea agendada</div>
-    <div class="modal-sub">Para que no se pierda del seguimiento, elegí qué hacemos.</div>
-    <button class="opcion-btn" onclick="abrirAgendarTarea('${sheet}',${fila},'${(cliente||'').replace(/'/g,"\\'")}','${(etapa||'').replace(/'/g,"\\'")}')">Agendar<span class="flecha">›</span></button>
-    ${esEtapaFinal ? `<button class="opcion-btn" onclick="abrirCerrarCliente('${sheet}',${fila},'${(cliente||'').replace(/'/g,"\\'")}')">Cerrar cliente<span class="flecha">›</span></button>` : ''}
+    <div class="modal-title">${esc(cliente)} quedó sin tarea agendada</div>
+    <div class="modal-sub">${vinculado ? 'Para que no se pierda del seguimiento, elegí qué hacemos.' : 'Esta tarea no está vinculada a un cliente de la base — igual, no se puede quedar sin nada agendado.'}</div>
+    ${vinculado
+      ? `<button class="opcion-btn" onclick="abrirAgendarTarea('${sheet}',${fila},'${cliente.replace(/'/g,"\\'")}','${(etapa||'').replace(/'/g,"\\'")}')">Agendar<span class="flecha">›</span></button>`
+      : `<button class="opcion-btn" onclick="cerrarModal();abrirEventoRapidoConNombre('${cliente.replace(/'/g,"\\'")}')">Agendar tarea libre<span class="flecha">›</span></button>`}
+    ${esEtapaFinal && vinculado ? `<button class="opcion-btn" onclick="abrirCerrarCliente('${sheet}',${fila},'${cliente.replace(/'/g,"\\'")}')">Cerrar cliente<span class="flecha">›</span></button>` : ''}
     <div class="modal-cancelar" onclick="cerrarModal()">Ahora no</div>`;
   document.getElementById('modal-overlay').classList.add('active');
+}
+/** Abre el cuadro de "nuevo evento" (mañana 9am por defecto) con el nombre ya escrito, para tareas sin vínculo real. */
+function abrirEventoRapidoConNombre(nombre) {
+  const manana = new Date(); manana.setDate(manana.getDate() + 1); manana.setHours(9, 0, 0, 0);
+  abrirEventoRapido(manana, 30);
+  setTimeout(function() {
+    const c = document.getElementById('ev-cliente');
+    if (c) { c.value = nombre; buscarClienteEvento(nombre); }
+  }, 100);
 }
 /** Cierre de un cliente en etapa final (Reserva/Escritura): pide los datos y pasa a Cierre. */
 function abrirCerrarCliente(sheet, fila, cliente) {
@@ -1711,7 +1728,38 @@ function confirmarVincularFinal(fechaISO) {
       .then(manejarResultado).catch(mostrarError).finally(_desbloquear);
   }
 }
+/**
+ * Antes de dar por hecha una tarea sin vincular, se busca si el texto coincide con
+ * algún cliente ya cargado. Si aparece, se ofrece vincularla ahí mismo — así una tarea
+ * tipeada directo en Google Calendar (sin pasar por la app) no queda invisible para el
+ * cliente real al que corresponde.
+ */
 function confirmarSimpleSi() {
+  const titulo = (document.querySelector('#modal-box .modal-title') || {}).innerText || '';
+  apiCall('buscarClienteUnico', { q: titulo }).then(function(res) {
+    if (res && res.length) {
+      document.getElementById('modal-box').innerHTML = `
+        <div class="modal-title">¿Es sobre alguno de estos?</div>
+        <div class="modal-sub">Si la vinculás, no se pierde del seguimiento.</div>
+        ${res.map(c => `<div class="ev-sug" onclick="_vincularSimpleYMarcar('${(c.nombre||'').replace(/'/g,"\\'")}','${c.telefono||''}')">${esc(c.nombre)}${c.etapa ? ' · ' + esc(c.etapa) : ''}</div>`).join('')}
+        <button class="btn-continuar" style="margin-top:12px" onclick="_marcarSimpleSinVincular()">No es sobre ninguno — marcar igual</button>
+        <div class="modal-cancelar" onclick="cerrarModal()">Cancelar</div>`;
+      return;
+    }
+    _marcarSimpleSinVincular();
+  }).catch(function() { _marcarSimpleSinVincular(); });
+}
+function _vincularSimpleYMarcar(nombre, telefono) {
+  apiCall('resolverFilasCliente', { nombre: nombre, telefono: telefono }).then(function(r) {
+    const props = r.propiedades || [];
+    const dest = props[0] ? { sheet: 'CAPTACIONES', fila: props[0].fila, etapa: props[0].etapa } : r.consulta;
+    if (!dest) { _marcarSimpleSinVincular(); return; }
+    // Se manda la etapa ACTUAL del cliente, para no pisarla con un valor vacío al vincular.
+    apiCall('vincularEventoAClienteExistente', { eventId: eventoActivoId, sheet: dest.sheet, fila: dest.fila, etapa: dest.etapa || '', tipoTarea: 'especial' })
+      .then(manejarResultado).catch(mostrarError);
+  }).catch(_marcarSimpleSinVincular);
+}
+function _marcarSimpleSinVincular() {
   const id = eventoActivoId;
   cerrarModal();
   _marcarEventoLocal(id, true); // tildada al instante
