@@ -187,9 +187,8 @@
   .prospeccion-card .idea { font-size:11.5px; color:var(--naranja); margin:6px 0; font-style:italic; }
   .prospeccion-card .pregunta { font-size:11.5px; color:var(--muted); margin-top:3px; }
   .checkin-banner { background:var(--naranja); color:#2c1600; border-radius:14px; padding:12px 14px; margin-bottom:14px; font-size:12.5px; font-weight:700; }
-  .usuario-selector { display:flex; gap:6px; padding:0 18px 10px; position:sticky; top:0; z-index:5; background:var(--bg); }
-  .usuario-btn { flex:1; text-align:center; padding:8px 0; font-size:12px; font-weight:700; border-radius:10px; background:var(--card); color:var(--muted); cursor:pointer; border:1.5px solid transparent; }
-  .usuario-btn.active { background:var(--verde); color:#062b23; border-color:var(--verde); }
+  .name-select { font-size:14.5px; font-weight:800; background:transparent; color:var(--text); border:none; outline:none; padding:0; -webkit-appearance:none; appearance:none; }
+  .name-select option { background:var(--card); color:var(--text); }
 
   /* Tarjeta de propiedad (Captación) — diseño ancho tipo mobile-card */
   .cap-item { background:linear-gradient(160deg, var(--card) 0%, #1a1d2b 100%); border:1px solid var(--line); border-radius:14px; padding:14px 14px 12px; margin-top:10px; width:100%; box-shadow:0 6px 18px rgba(0,0,0,.2); }
@@ -228,17 +227,16 @@
     <div class="avatar-bot">🤖</div>
     <div class="who-text">
       <div class="hi">Hola de nuevo</div>
-      <div class="name">Martu</div>
+      <select class="name-select" id="usuario-select" onchange="cambiarUsuarioActivo(this.value)">
+        <option value="Martu">Martu</option>
+        <option value="Jose">José</option>
+        <option value="Ambos">Ambos</option>
+      </select>
       <div class="motivacional" id="frase-motivacional"></div>
     </div>
   </div>
   <div class="header-btns" id="header-btns"></div>
 </header>
-<div class="usuario-selector">
-  <div class="usuario-btn" id="usuario-btn-Martu" onclick="cambiarUsuarioActivo('Martu')">Martu</div>
-  <div class="usuario-btn" id="usuario-btn-Jose" onclick="cambiarUsuarioActivo('Jose')">José</div>
-  <div class="usuario-btn" id="usuario-btn-Ambos" onclick="cambiarUsuarioActivo('Ambos')">Ambos</div>
-</div>
 
 <main>
   <div class="banner-error" id="banner-error"></div>
@@ -468,7 +466,8 @@ const cacheVistas = { agenda: null, activos: null, potenciales: null, metas: nul
 // ================= SELECTOR DE USUARIO (Martu/José/Ambos) =================
 window._usuarioActivo = localStorage.getItem('usuarioActivo') || 'Ambos';
 function pintarSelectorUsuario() {
-  ['Martu', 'Jose', 'Ambos'].forEach(u => document.getElementById('usuario-btn-' + u).classList.toggle('active', window._usuarioActivo === u));
+  const sel = document.getElementById('usuario-select');
+  if (sel) sel.value = window._usuarioActivo;
 }
 function cambiarUsuarioActivo(u) {
   window._usuarioActivo = u;
@@ -1140,7 +1139,7 @@ function buscarClienteEvento(txt) {
 /** Cuando el nombre escrito no está en la base: se crea el contacto sin salir del evento. */
 const ETAPAS_POR_EMBUDO = {
   venta: ['Contacto nuevo', 'Búsqueda activa', 'Muestra', 'Reserva', 'Cierre'],
-  captacion: ['Prelisting', 'Presentación de ACM', 'Publicación'],
+  captacion: ['Prelisting', 'Presentación de ACM', 'Fotos', 'Publicada', 'Reporte', 'Escritura', 'Cerrado ganado'],
   permuta: ['Esperando info', 'Búsqueda permuta', 'Reserva', 'Cierre']
 };
 function abrirCrearContactoRapido(nombre) {
@@ -1184,11 +1183,13 @@ function guardarContactoRapido() {
   apiCall('crearContactoRapido', {
     nombre: nombre, telefono: tel,
     embudo: document.getElementById('nc-embudo').value,
-    etapa: document.getElementById('nc-etapa').value
+    etapa: document.getElementById('nc-etapa').value,
+    // Queda a nombre del asesor activo; en "Ambos" se asigna a Martu.
+    asesor: (window._usuarioActivo && window._usuarioActivo !== 'Ambos') ? window._usuarioActivo : 'Martu'
   }).then(function(r) {
     mostrarToast('✓ ' + r.nombre + ' creado');
     // Vuelve al cuadro del evento con el cliente ya elegido.
-    cacheVistas.activosCrudo = null; cacheVistas.potencialesCrudo = null;
+    cacheVistas.activosCrudo = null; cacheVistas.potencialesCrudo = null; cacheVistas.captacionesCrudo = null;
     const ev = window._eventoRapido;
     if (ev) {
       abrirEventoRapido(ev.inicio, ev.duracion);
@@ -1360,6 +1361,71 @@ function manejarResultado(r) {
   if (r.tipo === 'ramas') { abrirRamas(r.opciones); return; }
   if (r.tipo === 'consulta_manana') { abrirConsultaManana(); return; }
   if (r.tipo === 'confirmar_simple') { abrirConfirmarSimple(r.titulo); return; }
+  if (r.tipo === 'captacion_si_no') { abrirCaptacionSiNo(r); return; }
+  if (r.tipo === 'captacion_ramas') { abrirCaptacionRamas(r); return; }
+  if (r.tipo === 'captacion_fecha') { abrirCaptacionFecha(r); return; }
+  if (r.tipo === 'captacion_confirmar') { abrirCaptacionConfirmarSimple(r); return; }
+  if (r.tipo === 'captacion_ok') { cerrarModal(); mostrarToast(r.mensaje || '✓ Listo'); refrescarSnapshotYVista(); return; }
+}
+// ---- Cadena de preguntas del workflow de captación (Prelisting → ACM → Fotos → Publicada) ----
+function abrirCaptacionSiNo(r) {
+  window._captacionPaso = r.paso;
+  document.getElementById('modal-box').innerHTML = `
+    <div class="modal-title">${esc(r.pregunta)}</div>
+    ${r.cliente ? `<div class="modal-sub">${esc(r.cliente)}</div>` : ''}
+    <button class="opcion-btn" onclick="responderCaptacionSiNo(true)">Sí<span class="flecha">›</span></button>
+    <button class="opcion-btn" onclick="responderCaptacionSiNo(false)">No<span class="flecha">›</span></button>
+    <div class="modal-cancelar" onclick="cerrarModal()">Cerrar</div>`;
+  document.getElementById('modal-overlay').classList.add('active');
+}
+function responderCaptacionSiNo(val) {
+  if (_bloqueadoAhora()) return;
+  apiCall('responderPreguntaCaptacion', { eventId: eventoActivoId, paso: window._captacionPaso, respuesta: val ? 'si' : 'no' })
+    .then(manejarResultado).catch(mostrarError).finally(_desbloquear);
+}
+function abrirCaptacionRamas(r) {
+  window._captacionPaso = r.paso;
+  document.getElementById('modal-box').innerHTML = `
+    <div class="modal-title">${r.cliente ? esc(r.cliente) + ' — ' : ''}Resultado del ACM</div>
+    ${r.opciones.map((op, i) => `<button class="opcion-btn" onclick="responderCaptacionRama(${i})">${esc(op)}<span class="flecha">›</span></button>`).join('')}
+    <div class="modal-cancelar" onclick="cerrarModal()">Cerrar</div>`;
+  document.getElementById('modal-overlay').classList.add('active');
+}
+function responderCaptacionRama(i) {
+  if (_bloqueadoAhora()) return;
+  apiCall('responderRamaCaptacion', { eventId: eventoActivoId, paso: window._captacionPaso, indice: i })
+    .then(manejarResultado).catch(mostrarError).finally(_desbloquear);
+}
+function abrirCaptacionFecha(r) {
+  window._captacionPaso = r.paso;
+  const manana = new Date(); manana.setDate(manana.getDate() + 1); manana.setHours(10, 0, 0, 0);
+  document.getElementById('modal-box').innerHTML = `
+    <div class="modal-title">${esc(r.pregunta)}</div>
+    <input type="datetime-local" id="cap-fecha-input" class="q" value="${toDatetimeLocal(manana)}">
+    <button class="btn-continuar" onclick="confirmarFechaCaptacionClick()">Confirmar</button>
+    <div class="modal-cancelar" onclick="cerrarModal()">Cancelar</div>`;
+  document.getElementById('modal-overlay').classList.add('active');
+}
+function confirmarFechaCaptacionClick() {
+  if (_bloqueadoAhora()) return;
+  const v = document.getElementById('cap-fecha-input').value;
+  if (!v) { _desbloquear(); mostrarToast('Elegí una fecha.'); return; }
+  apiCall('confirmarFechaCaptacion', { eventId: eventoActivoId, paso: window._captacionPaso, fecha: new Date(v).toISOString() })
+    .then(manejarResultado).catch(mostrarError).finally(_desbloquear);
+}
+function abrirCaptacionConfirmarSimple(r) {
+  window._captacionPaso = r.paso;
+  document.getElementById('modal-box').innerHTML = `
+    <div class="modal-title">${esc(r.mensaje)}</div>
+    <button class="opcion-btn" onclick="responderCaptacionConfirmarSimple(true)">Sí<span class="flecha">›</span></button>
+    <div class="modal-cancelar" onclick="responderCaptacionConfirmarSimple(false)">Ahora no</div>`;
+  document.getElementById('modal-overlay').classList.add('active');
+}
+function responderCaptacionConfirmarSimple(val) {
+  cerrarModal();
+  if (!val) { refrescarSnapshotYVista(); return; }
+  apiCall('confirmarAccionSimpleCaptacion', { eventId: eventoActivoId, paso: window._captacionPaso })
+    .then(function() { mostrarToast('✓ Reporte agendado'); refrescarSnapshotYVista(); }).catch(mostrarError);
 }
 function abrirDeshacer() {
   document.getElementById('modal-box').innerHTML = `
@@ -1480,7 +1546,7 @@ function continuarVincularHorario(indiceOpcion) {
   window._vincTmp.pasoIndex = opcion.pasoIndex;
   Promise.resolve(proponerHorariosLocal(null)).then(function(slots) {
     const etapa = window._vincTmp.etapa;
-    const necesitaPersona = etapa === 'Muestra' || ['Contacto nuevo','Prelisting','Presentación de ACM','Publicación','Esperando info','Búsqueda permuta','Búsqueda activa'].includes(etapa);
+    const necesitaPersona = etapa === 'Muestra' || ['Contacto nuevo','Prelisting','Presentación de ACM','Fotos','Publicada','Esperando info','Búsqueda permuta','Búsqueda activa'].includes(etapa);
     document.getElementById('modal-box').innerHTML = `
       <div class="modal-title">¿Cuándo?</div>
       <div class="modal-sub">${opcion.label} — ${window._vincTmp.nombre}</div>
@@ -1726,9 +1792,9 @@ function _cruzarConSnapshot(clientes) {
     return new Date(a.proximaFechaISO) - new Date(b.proximaFechaISO);
   });
 }
-const ORDEN_ETAPAS = ['Contacto nuevo','Prelisting','Presentación de ACM','Publicación','Esperando info','Búsqueda permuta','Búsqueda activa','Muestra','Reserva','Cierre'];
+const ORDEN_ETAPAS = ['Contacto nuevo','Prelisting','Presentación de ACM','Fotos','Publicada','Reporte','Escritura','Cerrado ganado','Descartado','Esperando info','Búsqueda permuta','Búsqueda activa','Muestra','Reserva','Cierre'];
 const COLOR_ETAPA = {
-  'Contacto nuevo': '#D9823E', 'Prelisting': '#CDD24C', 'Presentación de ACM': '#5DCB5B', 'Publicación': '#14DBA0',
+  'Contacto nuevo': '#D9823E', 'Prelisting': '#CDD24C', 'Presentación de ACM': '#5DCB5B', 'Fotos': '#8FE05A', 'Publicada': '#14DBA0', 'Reporte': '#2FB8C0', 'Escritura': '#7A6BD8', 'Cerrado ganado': '#22C55E', 'Descartado': '#5a5a6e',
   'Esperando info': '#3FC0F5', 'Búsqueda permuta': '#3D5FF5', 'Búsqueda activa': '#9B2FF2', 'Muestra': '#F62FE8',
   'Reserva': '#FF2E82', 'Cierre': '#FF3B45'
 };
@@ -1897,7 +1963,7 @@ function continuarAgendarEtapa(sheet, fila, etapa, indiceOpcion) {
   const opcion = window._opcionesEtapaTmp[indiceOpcion];
   const tipoTarea = opcion.tipoTarea, pasoIndex = opcion.pasoIndex;
   Promise.resolve(proponerHorariosLocal(null)).then(function(slots) {
-    const necesitaPersona = etapa === 'Muestra' || ['Contacto nuevo','Prelisting','Presentación de ACM','Publicación','Esperando info','Búsqueda permuta','Búsqueda activa'].includes(etapa);
+    const necesitaPersona = etapa === 'Muestra' || ['Contacto nuevo','Prelisting','Presentación de ACM','Fotos','Publicada','Esperando info','Búsqueda permuta','Búsqueda activa'].includes(etapa);
     document.getElementById('modal-box').innerHTML = `
       <div class="modal-title">¿Cuándo?</div>
       <div class="modal-sub">${opcion.label} — ${etapa}</div>
@@ -2312,7 +2378,7 @@ function agruparCaptaciones(items) {
     const asesor = r.agente || 'Sin asignar';
     agrupado[asesor] = agrupado[asesor] || [];
     const noPublicar = r.estadoRaw === 'NO_PUBLICAR';
-    const publicada = r.etapa === 'Publicación' || r.etapa === 'Cierre' || r.etapa === 'Ganado';
+    const publicada = r.etapa === 'Publicada' || r.etapa === 'Reporte' || r.etapa === 'Escritura' || r.etapa === 'Cerrado ganado' || r.etapa === 'Cierre' || r.etapa === 'Ganado';
     agrupado[asesor].push(Object.assign({}, r, {
       estado: noPublicar ? 'No quiere publicar / Rechazó ACM' : r.estadoRaw,
       publicada: publicada, noPublicar: noPublicar,
@@ -2447,7 +2513,7 @@ function _repintarTarjeta(fila) {
   const r = (cacheVistas.captacionesCrudo || []).find(x => x.fila === fila);
   if (!el || !r) { renderizarCaptaciones(agruparCaptaciones(cacheVistas.captacionesCrudo)); return; }
   const noPublicar = r.estadoRaw === 'NO_PUBLICAR' || r.noPublicar === true;
-  const publicada = r.etapa === 'Publicación' || r.etapa === 'Cierre' || r.etapa === 'Ganado';
+  const publicada = r.etapa === 'Publicada' || r.etapa === 'Reporte' || r.etapa === 'Escritura' || r.etapa === 'Cerrado ganado' || r.etapa === 'Cierre' || r.etapa === 'Ganado';
   const enriquecido = Object.assign({}, r, {
     estado: noPublicar ? 'No quiere publicar / Rechazó ACM' : r.estadoRaw,
     publicada: publicada, noPublicar: noPublicar
