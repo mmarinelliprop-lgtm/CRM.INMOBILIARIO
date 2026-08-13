@@ -118,6 +118,8 @@
   .top-toggle-btn { flex:1; text-align:center; padding:10px 0; font-size:13px; font-weight:700; color:var(--muted); border-radius:10px; cursor:pointer; }
   .top-toggle-btn.active { background:var(--verde); color:#062b23; }
   .funnel-label { font-size:11px; font-weight:800; color:var(--muted); text-transform:uppercase; letter-spacing:.5px; margin:16px 2px 8px; }
+  .grupo-mayor { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:12px; margin-bottom:12px; }
+  .grupo-mayor-title { font-size:11.5px; font-weight:800; letter-spacing:.5px; color:var(--muted); text-transform:uppercase; margin:2px 4px 10px; }
   .grupo { border-radius:14px; margin-bottom:8px; overflow:hidden; }
   .grupo-head { display:flex; align-items:center; justify-content:space-between; padding:13px 14px; cursor:pointer; font-weight:800; font-size:13.5px; color:#fff; text-shadow:0 1px 2px rgba(0,0,0,.25); }
   .grupo-head .chev { transition:transform .15s; }
@@ -1350,10 +1352,14 @@ function manejarResultado(r) {
   if (r.tipo === 'completada_simple' || r.tipo === 'ok_simple') {
     // Se ve tildada al instante; el snapshot real se refresca en segundo plano.
     _marcarEventoLocal(eventoActivoId, true);
-    refrescarSnapshot().then(pintarVistaActual).catch(() => {});
+    refrescarSnapshot().then(pintarVistaActual).then(function() { _chequearSinTareaSiguiente(r.sheet, r.fila, r.cliente); }).catch(() => {});
     return;
   }
-  if (r.tipo === 'terminal') { _marcarEventoLocal(eventoActivoId, true); refrescarSnapshotYVista(); return; }
+  if (r.tipo === 'terminal') {
+    _marcarEventoLocal(eventoActivoId, true);
+    refrescarSnapshot().then(pintarVistaActual).then(function() { chequearSinTarea(); _chequearSinTareaSiguiente(r.sheet, r.fila, r.cliente); });
+    return;
+  }
   if (r.tipo === 'links') { abrirPasoLinks(); return; }
   if (r.tipo === 'horario') { abrirPropuestaHorario(r); return; }
   if (r.tipo === 'horario_acm') { abrirPropuestaHorarioACM(r.fechaMin, r.personaSugerida); return; }
@@ -1366,6 +1372,25 @@ function manejarResultado(r) {
   if (r.tipo === 'captacion_fecha') { abrirCaptacionFecha(r); return; }
   if (r.tipo === 'captacion_confirmar') { abrirCaptacionConfirmarSimple(r); return; }
   if (r.tipo === 'captacion_ok') { cerrarModal(); mostrarToast(r.mensaje || '✓ Listo'); refrescarSnapshotYVista(); return; }
+}
+/**
+ * Red de seguridad: ningún cliente activo puede quedar sin tarea agendada.
+ * Se llama después de cualquier acción que podría haber terminado el flujo sin
+ * crear la próxima tarea (marcar hecho, completar un paso, resultado del ACM, etc.).
+ * Si de verdad no le queda nada agendado, ofrece agendar libre o ubicarlo en el workflow.
+ */
+function _chequearSinTareaSiguiente(sheet, fila, cliente) {
+  if (!sheet || !fila) return;
+  const tieneTarea = (window._calSnapshot || []).some(function(ev) {
+    return ev.sheet === sheet && Number(ev.fila) === Number(fila) && !ev.completada;
+  });
+  if (tieneTarea) return;
+  document.getElementById('modal-box').innerHTML = `
+    <div class="modal-title">${esc(cliente) || 'Este contacto'} quedó sin tarea agendada</div>
+    <div class="modal-sub">Para que no se pierda del seguimiento, agendale algo ahora.</div>
+    <button class="opcion-btn" onclick="abrirAgendarTarea('${sheet}',${fila},'${(cliente||'').replace(/'/g,"\\'")}')">Agendar<span class="flecha">›</span></button>
+    <div class="modal-cancelar" onclick="cerrarModal()">Ahora no</div>`;
+  document.getElementById('modal-overlay').classList.add('active');
 }
 // ---- Cadena de preguntas del workflow de captación (Prelisting → ACM → Fotos → Publicada) ----
 function abrirCaptacionSiNo(r) {
@@ -1415,6 +1440,7 @@ function confirmarFechaCaptacionClick() {
 }
 function abrirCaptacionConfirmarSimple(r) {
   window._captacionPaso = r.paso;
+  window._captacionCtx = { sheet: 'CAPTACIONES', cliente: r.cliente };
   document.getElementById('modal-box').innerHTML = `
     <div class="modal-title">${esc(r.mensaje)}</div>
     <button class="opcion-btn" onclick="responderCaptacionConfirmarSimple(true)">Sí<span class="flecha">›</span></button>
@@ -1423,7 +1449,15 @@ function abrirCaptacionConfirmarSimple(r) {
 }
 function responderCaptacionConfirmarSimple(val) {
   cerrarModal();
-  if (!val) { refrescarSnapshotYVista(); return; }
+  if (!val) {
+    // Si declina el reporte (u otra acción de un solo botón) y la propiedad sigue activa,
+    // no puede quedar sin nada agendado.
+    refrescarSnapshotYVista();
+    apiCall('getMetaDeEvento', { eventId: eventoActivoId }).then(function(m) {
+      if (m && m.fila) _chequearSinTareaSiguiente(m.sheet, m.fila, m.cliente);
+    }).catch(() => {});
+    return;
+  }
   apiCall('confirmarAccionSimpleCaptacion', { eventId: eventoActivoId, paso: window._captacionPaso })
     .then(function() { mostrarToast('✓ Reporte agendado'); refrescarSnapshotYVista(); }).catch(mostrarError);
 }
@@ -1546,7 +1580,7 @@ function continuarVincularHorario(indiceOpcion) {
   window._vincTmp.pasoIndex = opcion.pasoIndex;
   Promise.resolve(proponerHorariosLocal(null)).then(function(slots) {
     const etapa = window._vincTmp.etapa;
-    const necesitaPersona = etapa === 'Muestra' || ['Contacto nuevo','Prelisting','Presentación de ACM','Fotos','Publicada','Esperando info','Búsqueda permuta','Búsqueda activa'].includes(etapa);
+    const necesitaPersona = etapa === 'Muestra' || etapa === 'Muestra permuta' || ['Contacto nuevo','Prelisting','Presentación de ACM','Fotos','Publicada','Esperando info','Búsqueda permuta','Búsqueda activa'].includes(etapa);
     document.getElementById('modal-box').innerHTML = `
       <div class="modal-title">¿Cuándo?</div>
       <div class="modal-sub">${opcion.label} — ${window._vincTmp.nombre}</div>
@@ -1792,10 +1826,10 @@ function _cruzarConSnapshot(clientes) {
     return new Date(a.proximaFechaISO) - new Date(b.proximaFechaISO);
   });
 }
-const ORDEN_ETAPAS = ['Contacto nuevo','Prelisting','Presentación de ACM','Fotos','Publicada','Reporte','Escritura','Cerrado ganado','Descartado','Esperando info','Búsqueda permuta','Búsqueda activa','Muestra','Reserva','Cierre'];
+const ORDEN_ETAPAS = ['Contacto nuevo','Prelisting','Presentación de ACM','Fotos','Publicada','Reporte','Escritura','Cerrado ganado','Descartado','Esperando info','Búsqueda permuta','Muestra permuta','Búsqueda activa','Muestra','Reserva','Cierre'];
 const COLOR_ETAPA = {
   'Contacto nuevo': '#D9823E', 'Prelisting': '#CDD24C', 'Presentación de ACM': '#5DCB5B', 'Fotos': '#8FE05A', 'Publicada': '#14DBA0', 'Reporte': '#2FB8C0', 'Escritura': '#7A6BD8', 'Cerrado ganado': '#22C55E', 'Descartado': '#5a5a6e',
-  'Esperando info': '#3FC0F5', 'Búsqueda permuta': '#3D5FF5', 'Búsqueda activa': '#9B2FF2', 'Muestra': '#F62FE8',
+  'Esperando info': '#3FC0F5', 'Búsqueda permuta': '#3D5FF5', 'Muestra permuta': '#7A6BD8', 'Búsqueda activa': '#9B2FF2', 'Muestra': '#F62FE8',
   'Reserva': '#FF2E82', 'Cierre': '#FF3B45'
 };
 // Grupos de Activos: uno solo abierto por vez, y el estado sobrevive a los repintados
@@ -1805,21 +1839,51 @@ function abrirGrupo(etapa) {
   _grupoAbierto = (_grupoAbierto === etapa) ? null : etapa;
   if (cacheVistas.activos) renderizarActivos(cacheVistas.activos);
 }
+// Pipeline agrupado: Nuevo contacto / Compradores / Propietarios / Permuta / Reserva / Escritura.
+// Los cerrados (Ganado, Descartado, Cierre, Cerrado ganado) ya vienen excluidos desde el servidor:
+// el dato queda guardado para medir, pero desaparece de esta vista.
+const PIPELINE_GRUPOS = [
+  { titulo: 'Nuevo contacto', color: '#D9823E', filtro: c => c.etapa === 'Contacto nuevo' },
+  { titulo: 'Compradores', subs: [
+      { titulo: 'Búsqueda', color: '#E0A23E', filtro: c => c.etapa === 'Búsqueda activa' },
+      { titulo: 'Muestra',  color: '#CDD24C', filtro: c => c.etapa === 'Muestra' }
+  ]},
+  { titulo: 'Propietarios', subs: [
+      { titulo: 'Prelisting',     color: '#9FD24C', filtro: c => c.etapa === 'Prelisting' },
+      { titulo: 'ACM',            color: '#5DCB5B', filtro: c => c.etapa === 'Presentación de ACM' && c.docCompleta },
+      { titulo: 'Documentación',  color: '#3FC79A', filtro: c => c.etapa === 'Presentación de ACM' && !c.docCompleta },
+      { titulo: 'Fotos',          color: '#2FD9B8', filtro: c => c.etapa === 'Fotos' },
+      { titulo: 'Publicada',      color: '#14DBA0', filtro: c => c.etapa === 'Publicada' || c.etapa === 'Reporte' }
+  ]},
+  { titulo: 'Permuta', subs: [
+      { titulo: 'Esperando info', color: '#2FB8C0', filtro: c => c.etapa === 'Esperando info' },
+      { titulo: 'Búsqueda',       color: '#3FC0F5', filtro: c => c.etapa === 'Búsqueda permuta' },
+      { titulo: 'Muestra',        color: '#3D5FF5', filtro: c => c.etapa === 'Muestra permuta' }
+  ]},
+  { titulo: 'Reserva', color: '#9B2FF2', filtro: c => c.etapa === 'Reserva' },
+  { titulo: 'Escritura', color: '#F62FE8', filtro: c => c.etapa === 'Escritura' }
+];
+function _filaClienteHtml(c) {
+  return `<div class="cliente-row" onclick="abrirPerfil('${c.sheet}', ${c.fila})">
+    <div style="flex:1"><div class="cliente-nombre">${esc(c.nombre)}${c.propiedad ? ' <span style="color:var(--muted);font-weight:500;font-size:10.5px">· ' + esc(c.propiedad) + '</span>' : ''}${c.asesor ? ' <span style="color:var(--muted);font-weight:500;font-size:10.5px">· ' + c.asesor + '</span>' : ''}</div><div class="cliente-tarea">${esc(c.proximaTarea)}${c.proximaFechaISO ? ' · ' + new Date(c.proximaFechaISO).toLocaleDateString('es-AR',{day:'2-digit',month:'2-digit'}) : ''}</div></div>
+    <div class="cliente-actions"><button class="icon-btn" onclick="event.stopPropagation();abrirWhatsapp('${c.telefono}')">💬</button></div>
+  </div>`;
+}
+function _subgrupoHtml(clave, titulo, color, items) {
+  const filas = items.map(_filaClienteHtml).join('') || '<div class="loading" style="padding:8px 4px">Sin clientes acá.</div>';
+  return `<div class="grupo${_grupoAbierto === clave ? ' abierto' : ''}" style="background:${color}"><div class="grupo-head" onclick="abrirGrupo('${clave.replace(/'/g,"\\'")}')"><span>${titulo} (${items.length})</span><span class="chev">⌄</span></div><div class="grupo-body">${filas}</div></div>`;
+}
 function renderizarActivos(clientes) {
-  const grupos = {};
-  clientes.forEach(c => { grupos[c.etapa] = grupos[c.etapa] || []; grupos[c.etapa].push(c); });
-  const etapasOrdenadas = ORDEN_ETAPAS.concat(Object.keys(grupos).filter(e => !ORDEN_ETAPAS.includes(e)));
-  document.getElementById('grupos-activos').innerHTML = etapasOrdenadas.map(etapa => {
-    const items = grupos[etapa] || [];
-    const color = (items[0] && items[0].color) || COLOR_ETAPA[etapa] || '#8b8fa8';
-    const filas = items.map(c => `
-      <div class="cliente-row" onclick="abrirPerfil('${c.sheet}', ${c.fila})">
-        <div style="flex:1"><div class="cliente-nombre">${esc(c.nombre)}${c.propiedad ? ' <span style="color:var(--muted);font-weight:500;font-size:10.5px">· ' + esc(c.propiedad) + '</span>' : ''}${c.asesor ? ' <span style="color:var(--muted);font-weight:500;font-size:10.5px">· ' + c.asesor + '</span>' : ''}</div><div class="cliente-tarea">${esc(c.proximaTarea)}${c.proximaFechaISO ? ' · ' + new Date(c.proximaFechaISO).toLocaleDateString('es-AR',{day:'2-digit',month:'2-digit'}) : ''}</div></div>
-        <div class="cliente-actions">
-          <button class="icon-btn" onclick="event.stopPropagation();abrirWhatsapp('${c.telefono}')">💬</button>
-        </div>
-      </div>`).join('') || '<div class="loading" style="padding:8px 4px">Sin clientes en esta etapa.</div>';
-    return `<div class="grupo${_grupoAbierto === etapa ? ' abierto' : ''}" style="background:${color}"><div class="grupo-head" onclick="abrirGrupo('${etapa.replace(/'/g,"\\'")}')"><span>${etapa} (${items.length})</span><span class="chev">⌄</span></div><div class="grupo-body">${filas}</div></div>`;
+  document.getElementById('grupos-activos').innerHTML = PIPELINE_GRUPOS.map(function(g) {
+    if (g.subs) {
+      const cuerpos = g.subs.map(function(s) {
+        const items = clientes.filter(s.filtro);
+        return _subgrupoHtml(g.titulo + '>' + s.titulo, s.titulo, s.color, items);
+      }).join('');
+      return `<div class="grupo-mayor"><div class="grupo-mayor-title">${g.titulo}</div>${cuerpos}</div>`;
+    }
+    const items = clientes.filter(g.filtro);
+    return `<div class="grupo-mayor">${_subgrupoHtml(g.titulo, g.titulo, g.color, items)}</div>`;
   }).join('');
 }
 function abrirWhatsapp(tel) { window.open('https://wa.me/54' + (tel || '').replace(/\D/g,''), '_blank'); }
@@ -1963,7 +2027,7 @@ function continuarAgendarEtapa(sheet, fila, etapa, indiceOpcion) {
   const opcion = window._opcionesEtapaTmp[indiceOpcion];
   const tipoTarea = opcion.tipoTarea, pasoIndex = opcion.pasoIndex;
   Promise.resolve(proponerHorariosLocal(null)).then(function(slots) {
-    const necesitaPersona = etapa === 'Muestra' || ['Contacto nuevo','Prelisting','Presentación de ACM','Fotos','Publicada','Esperando info','Búsqueda permuta','Búsqueda activa'].includes(etapa);
+    const necesitaPersona = etapa === 'Muestra' || etapa === 'Muestra permuta' || ['Contacto nuevo','Prelisting','Presentación de ACM','Fotos','Publicada','Esperando info','Búsqueda permuta','Búsqueda activa'].includes(etapa);
     document.getElementById('modal-box').innerHTML = `
       <div class="modal-title">¿Cuándo?</div>
       <div class="modal-sub">${opcion.label} — ${etapa}</div>
