@@ -927,11 +927,18 @@ function buscarClienteEdicion(txt) {
   const q = (txt || '').toLowerCase().trim();
   window._edtCliente = null; // hasta que elija uno de la lista, queda como texto libre
   if (q.length < 2) { cont.innerHTML = ''; return; }
-  const base = (cacheVistas.activosCrudo || []).concat(cacheVistas.potencialesCrudo || []);
-  const res = base.filter(c => (c.nombre || '').toLowerCase().includes(q)).slice(0, 5);
-  cont.innerHTML = res.length
-    ? res.map(c => `<div class="ev-sug" onclick="elegirClienteEdicion('${(c.nombre||'').replace(/'/g,"\\'")}','${c.sheet}',${c.fila})">${esc(c.nombre)}${c.etapa ? ' · ' + esc(c.etapa) : ''}</div>`).join('')
-    : '<div class="ev-sug" style="color:var(--muted)">Sin coincidencias — queda como texto libre.</div>';
+  cont.innerHTML = '<div class="ev-sug" style="color:var(--muted)">Buscando…</div>';
+  // Si las listas todavía no se cargaron en esta sesión, se traen ahora (antes buscaba sobre vacío y decía "sin coincidencias" aunque el cliente existiera).
+  const traerActivos = cacheVistas.activosCrudo ? Promise.resolve(cacheVistas.activosCrudo) : apiCall('getClientesActivos', { filtro: '' }).then(r => { cacheVistas.activosCrudo = r; return r; });
+  const traerPotenciales = cacheVistas.potencialesCrudo ? Promise.resolve(cacheVistas.potencialesCrudo) : apiCall('getPotencialesCrudo').then(r => { cacheVistas.potencialesCrudo = r; return r; });
+  Promise.all([traerActivos, traerPotenciales]).then(function(listas) {
+    if (document.getElementById('edt-cliente').value.trim().toLowerCase() !== q) return; // siguió escribiendo, esta búsqueda ya no aplica
+    const base = listas[0].concat(listas[1]);
+    const res = base.filter(c => (c.nombre || '').toLowerCase().includes(q)).slice(0, 5);
+    cont.innerHTML = res.length
+      ? res.map(c => `<div class="ev-sug" onclick="elegirClienteEdicion('${(c.nombre||'').replace(/'/g,"\\'")}','${c.sheet}',${c.fila})">${esc(c.nombre)}${c.etapa ? ' · ' + esc(c.etapa) : ''}</div>`).join('')
+      : '<div class="ev-sug" style="color:var(--muted)">Sin coincidencias — queda como texto libre.</div>';
+  }).catch(function() { cont.innerHTML = '<div class="ev-sug" style="color:var(--muted)">No pude buscar — probá de nuevo.</div>'; });
 }
 function elegirClienteEdicion(nombre, sheet, fila) {
   window._edtCliente = { sheet: sheet, fila: fila, nombre: nombre };
@@ -1164,11 +1171,17 @@ function buscarClienteEvento(txt) {
   const cont = document.getElementById('ev-cliente-res');
   const q = (txt || '').toLowerCase().trim();
   if (q.length < 2) { cont.innerHTML = ''; window._eventoRapido.cliente = null; return; }
-  const base = (cacheVistas.activosCrudo || []).concat(cacheVistas.potencialesCrudo || []);
-  const res = base.filter(c => (c.nombre || '').toLowerCase().includes(q)).slice(0, 5);
-  cont.innerHTML = res.length
-    ? res.map(c => `<div class="ev-sug" onclick="elegirClienteEvento('${(c.nombre||'').replace(/'/g,"\\'")}','${c.sheet}',${c.fila})">${esc(c.nombre)}${c.etapa ? ' · ' + esc(c.etapa) : ''}</div>`).join('')
-    : `<div class="ev-sug" style="color:var(--lila)" onclick="abrirCrearContactoRapido('${(txt||'').replace(/'/g,"\\'").trim()}')">+ Crear "${esc(txt)}" como contacto nuevo</div>`;
+  cont.innerHTML = '<div class="ev-sug" style="color:var(--muted)">Buscando…</div>';
+  const traerActivos = cacheVistas.activosCrudo ? Promise.resolve(cacheVistas.activosCrudo) : apiCall('getClientesActivos', { filtro: '' }).then(r => { cacheVistas.activosCrudo = r; return r; });
+  const traerPotenciales = cacheVistas.potencialesCrudo ? Promise.resolve(cacheVistas.potencialesCrudo) : apiCall('getPotencialesCrudo').then(r => { cacheVistas.potencialesCrudo = r; return r; });
+  Promise.all([traerActivos, traerPotenciales]).then(function(listas) {
+    if (document.getElementById('ev-cliente').value.trim().toLowerCase() !== q) return;
+    const base = listas[0].concat(listas[1]);
+    const res = base.filter(c => (c.nombre || '').toLowerCase().includes(q)).slice(0, 5);
+    cont.innerHTML = res.length
+      ? res.map(c => `<div class="ev-sug" onclick="elegirClienteEvento('${(c.nombre||'').replace(/'/g,"\\'")}','${c.sheet}',${c.fila})">${esc(c.nombre)}${c.etapa ? ' · ' + esc(c.etapa) : ''}</div>`).join('')
+      : `<div class="ev-sug" style="color:var(--lila)" onclick="abrirCrearContactoRapido('${(txt||'').replace(/'/g,"\\'").trim()}')">+ Crear "${esc(txt)}" como contacto nuevo</div>`;
+  }).catch(function() { cont.innerHTML = '<div class="ev-sug" style="color:var(--muted)">No pude buscar — probá de nuevo.</div>'; });
 }
 /** Cuando el nombre escrito no está en la base: se crea el contacto sin salir del evento. */
 const ETAPAS_POR_EMBUDO = {
