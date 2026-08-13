@@ -664,22 +664,13 @@ function pintarHeaderBtns(v) {
 function cerrarModal() {
   document.getElementById('modal-overlay').classList.remove('active');
   // Red de seguridad universal: si el cuadro se cierra después de marcar una tarea como
-  // hecha (sea cual sea el camino que tomó el flujo), se verifica que el cliente haya
-  // quedado con algo agendado. Se vuelve a chequear contra el calendario ya actualizado,
-  // así que si SÍ se agendó algo en el medio, no molesta — solo avisa si de verdad quedó vacío.
-  if (window._chequeoPendienteEventId) {
-    const id = window._chequeoPendienteEventId;
-    window._chequeoPendienteEventId = null;
-    apiCall('getMetaDeEvento', { eventId: id }).then(function(m) {
-      if (!m || !m.cliente) return; // tarea sin ningún nombre de cliente: no aplica
-      if (m.etapa && ['Perdido', 'Ganado', 'Descartado', 'Cierre', 'Cerrado ganado'].indexOf(m.etapa) !== -1) return; // ya no está activo
-      refrescarSnapshot().then(function() { _chequearSinTareaSiguiente(m.sheet, m.fila, m.cliente, m.etapa); });
-    }).catch(function(err) {
-      // Si esto falla (ej: el backend publicado no tiene esta acción todavía), se avisa
-      // en vez de tragárselo en silencio — antes esto podía ocultar que faltaba redeployar.
-      mostrarToast('⚠️ No pude verificar si quedó sin tarea agendada (revisá que el Apps Script esté actualizado).');
-      console.error('chequeo sin tarea:', err);
-    });
+  // hecha, se verifica que el cliente haya quedado con algo agendado.
+  // Se resuelve con datos que ya están en memoria (sin pedirle nada al servidor), porque
+  // hacerlo con llamadas extra metía el aviso en la fila y tardaba más de 15 segundos.
+  const p = window._chequeoPendiente;
+  if (p) {
+    window._chequeoPendiente = null;
+    setTimeout(function() { _chequearSinTareaSiguiente(p.sheet, p.fila, p.cliente, p.etapa); }, 400);
   }
 }
 let _toastTimer = null;
@@ -1422,7 +1413,20 @@ function guardarQuiz() {
 let eventoActivoId = null;
 function marcarHecho(id) {
   eventoActivoId = id;
-  window._chequeoPendienteEventId = id; // se verifica al cerrar el cuadro (ver cerrarModal)
+  // Se guardan los datos del cliente AHORA, desde el snapshot que ya está en memoria.
+  // Antes esto se pedía al servidor al cerrar el cuadro, y esa llamada extra hacía que
+  // el aviso de "quedó sin tarea" tardara más de 15 segundos en aparecer.
+  const ev = (window._calSnapshot || []).find(e => e.id === id);
+  if (ev && (ev.cliente || (ev.sheet && ev.fila))) {
+    let etapa = null;
+    if (ev.sheet && ev.fila) {
+      const c = (cacheVistas.activosCrudo || []).find(x => x.sheet === ev.sheet && Number(x.fila) === Number(ev.fila));
+      if (c) etapa = c.etapa;
+    }
+    window._chequeoPendiente = { sheet: ev.sheet || null, fila: ev.fila || null, cliente: ev.cliente || '', etapa: etapa };
+  } else {
+    window._chequeoPendiente = null;
+  }
   apiCall('iniciarCompletarTarea', { eventId: id }).then(manejarResultado).catch(mostrarError);
 }
 /** Marca/desmarca un evento en el snapshot local y repinta al instante (el refresh real corre atrás). */
@@ -1467,9 +1471,11 @@ function manejarResultado(r) {
  * Si de verdad no le queda nada agendado, ofrece agendar libre o ubicarlo en el workflow.
  */
 function _chequearSinTareaSiguiente(sheet, fila, cliente, etapa) {
-  if (!cliente) return;
+  if (!cliente && !(sheet && fila)) return;
   const tieneTarea = (window._calSnapshot || []).some(function(ev) {
-    return !ev.completada && (sheet && fila ? (ev.sheet === sheet && Number(ev.fila) === Number(fila)) : ev.cliente === cliente);
+    if (ev.completada) return false;
+    if (ev.id === eventoActivoId) return false; // la que se acaba de marcar no cuenta
+    return (sheet && fila) ? (ev.sheet === sheet && Number(ev.fila) === Number(fila)) : ev.cliente === cliente;
   });
   if (tieneTarea) return;
   const esEtapaFinal = ['Reserva', 'Escritura'].indexOf(etapa) !== -1;
