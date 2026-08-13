@@ -930,7 +930,7 @@ function abrirEvento(id) {
     <div id="edt-cliente-res"></div>
     ${ev.completada
       ? `<button class="btn-continuar" style="background:var(--card-2);color:var(--text)" onclick="cerrarModal();abrirDeshacerDe('${id}')">↩ Deshacer (está marcada como hecha)</button>`
-      : `<button class="btn-continuar" onclick="cerrarModal();marcarHecho('${id}')">✓ Marcar hecha</button>`}
+      : `<button class="btn-continuar" onclick="marcarHecho('${id}')">✓ Marcar hecha</button>`}
     <div class="ev-acciones">
       <div class="modal-cancelar" style="margin:0;color:var(--magenta)" onclick="eliminarEventoClick('${id}')">Eliminar</div>
       <button class="btn-continuar" style="margin:0;width:auto;padding:10px 22px" onclick="guardarEdicionEvento('${id}')">Guardar</button>
@@ -1430,12 +1430,14 @@ function manejarResultado(r) {
   if (r.tipo === 'ya_completada') { abrirDeshacer(); return; }
   if (r.tipo === 'completada_simple' || r.tipo === 'ok_simple') {
     // Se ve tildada al instante; el snapshot real se refresca en segundo plano.
-    // (La verificación de "quedó sin tarea" corre sola al cerrar el cuadro — ver cerrarModal.)
+    // Se cierra el cuadro acá (no antes): así dispara la verificación de "quedó sin tarea" en cerrarModal.
+    cerrarModal();
     _marcarEventoLocal(eventoActivoId, true);
     refrescarSnapshot().then(pintarVistaActual).catch(() => {});
     return;
   }
   if (r.tipo === 'terminal') {
+    cerrarModal();
     _marcarEventoLocal(eventoActivoId, true);
     refrescarSnapshot().then(pintarVistaActual).then(function() { chequearSinTarea(); });
     return;
