@@ -905,6 +905,7 @@ function abrirEvento(id) {
   const inicio = new Date(ev.inicioISO);
   const dur = Math.round((new Date(ev.finISO) - inicio) / 60000);
   window._edtCliente = ev.sheet && ev.fila ? { sheet: ev.sheet, fila: ev.fila, nombre: ev.cliente } : null;
+  window._edtEventoId = id;
   document.getElementById('modal-box').innerHTML = `
     <input class="ev-titulo" id="edt-titulo" value="${esc(ev.titulo)}">
     <div class="ev-row"><span class="ev-ico">🕐</span><input type="datetime-local" id="edt-fecha" value="${toDatetimeLocal(inicio)}">
@@ -918,7 +919,8 @@ function abrirEvento(id) {
     <div class="ev-acciones">
       <div class="modal-cancelar" style="margin:0;color:var(--magenta)" onclick="eliminarEventoClick('${id}')">Eliminar</div>
       <button class="btn-continuar" style="margin:0;width:auto;padding:10px 22px" onclick="guardarEdicionEvento('${id}')">Guardar</button>
-    </div>`;
+    </div>
+    <div class="modal-cancelar" style="margin-top:10px" onclick="cerrarModal()">Cerrar sin guardar</div>`;
   document.getElementById('modal-overlay').classList.add('active');
 }
 /** Buscador de cliente dentro de la edición: cambia a quién apunta el evento (o lo deja como texto libre). */
@@ -937,7 +939,8 @@ function buscarClienteEdicion(txt) {
     const res = base.filter(c => (c.nombre || '').toLowerCase().includes(q)).slice(0, 5);
     cont.innerHTML = res.length
       ? res.map(c => `<div class="ev-sug" onclick="elegirClienteEdicion('${(c.nombre||'').replace(/'/g,"\\'")}','${c.sheet}',${c.fila})">${esc(c.nombre)}${c.etapa ? ' · ' + esc(c.etapa) : ''}</div>`).join('')
-      : '<div class="ev-sug" style="color:var(--muted)">Sin coincidencias — queda como texto libre.</div>';
+        + `<div class="ev-sug" style="color:var(--lila)" onclick="abrirCrearContactoRapido('${txt.replace(/'/g,"\\'")}','edicion')">+ Crear "${esc(txt)}" como contacto nuevo</div>`
+      : `<div class="ev-sug" style="color:var(--lila)" onclick="abrirCrearContactoRapido('${txt.replace(/'/g,"\\'")}','edicion')">+ No está en la base — crear "${esc(txt)}"</div>`;
   }).catch(function() { cont.innerHTML = '<div class="ev-sug" style="color:var(--muted)">No pude buscar — probá de nuevo.</div>'; });
 }
 function elegirClienteEdicion(nombre, sheet, fila) {
@@ -1189,11 +1192,13 @@ const ETAPAS_POR_EMBUDO = {
   captacion: ['Prelisting', 'Presentación de ACM', 'Fotos', 'Publicada', 'Reporte', 'Escritura', 'Cerrado ganado'],
   permuta: ['Esperando info', 'Búsqueda permuta', 'Reserva', 'Cierre']
 };
-function abrirCrearContactoRapido(nombre) {
+function abrirCrearContactoRapido(nombre, origen) {
+  // "origen" indica a qué cuadro volver después de crear: 'evento' (crear evento nuevo) o 'edicion' (editar uno existente).
+  window._crearContactoOrigen = origen || 'evento';
   // Guardamos lo que ya venía escrito para no perderlo al volver.
   const t = document.getElementById('ev-titulo'), u = document.getElementById('ev-ubicacion'),
         d = document.getElementById('ev-desc'), c = document.getElementById('ev-categoria');
-  if (window._eventoRapido) {
+  if (window._eventoRapido && window._crearContactoOrigen === 'evento') {
     window._eventoRapido.borrador = {
       titulo: t ? t.value : '', ubicacion: u ? u.value : '',
       desc: d ? d.value : '', categoria: c ? c.value : 'reuniones'
@@ -1237,6 +1242,12 @@ function guardarContactoRapido() {
     mostrarToast('✓ ' + r.nombre + ' creado');
     // Vuelve al cuadro del evento con el cliente ya elegido.
     cacheVistas.activosCrudo = null; cacheVistas.potencialesCrudo = null; cacheVistas.captacionesCrudo = null;
+    if (window._crearContactoOrigen === 'edicion' && window._edtEventoId) {
+      const id = window._edtEventoId;
+      abrirEvento(id);
+      setTimeout(function() { elegirClienteEdicion(r.nombre, r.sheet, r.fila); }, 120);
+      return;
+    }
     const ev = window._eventoRapido;
     if (ev) {
       abrirEventoRapido(ev.inicio, ev.duracion);
@@ -2008,13 +2019,17 @@ function guardarEtapaClick(sheet, fila) {
 }
 
 // ---- Agendar tarea desde el perfil ----
-function abrirAgendarTarea(sheet, fila, nombre) {
+function abrirAgendarTarea(sheet, fila, nombre, etapaActual) {
+  // Si ya sabemos la etapa (viene del cartel de "sin tarea"), vamos directo a elegir el paso —
+  // sin la pregunta previa ni el desplegable de etapa, que eran pasos de más.
+  if (etapaActual) { mostrarPasoDeEtapa(sheet, fila, nombre, etapaActual); return; }
   document.getElementById('modal-box').innerHTML = `
     <div class="modal-title">Agendar tarea — ${nombre}</div>
     <div class="modal-sub">¿Cómo querés agendarla?</div>
     <button class="opcion-btn" onclick="mostrarAgendarEtapa('${sheet}',${fila},'${nombre.replace(/'/g,"\\'")}')">Elegir una etapa del workflow<span class="flecha">›</span></button>
     <button class="opcion-btn" onclick="mostrarAgendarLibre('${sheet}',${fila},'${nombre.replace(/'/g,"\\'")}')">Escribir una tarea libre<span class="flecha">›</span></button>
     <div class="modal-cancelar" onclick="abrirPerfil('${sheet}', ${fila})">Volver al perfil</div>`;
+  document.getElementById('modal-overlay').classList.add('active');
 }
 function mostrarAgendarEtapa(sheet, fila, nombre) {
   document.getElementById('modal-box').innerHTML = `
@@ -2024,15 +2039,18 @@ function mostrarAgendarEtapa(sheet, fila, nombre) {
     <button class="btn-continuar" onclick="mostrarPasoDeEtapa('${sheet}',${fila},'${nombre.replace(/'/g,"\\'")}')">Siguiente: elegir el paso puntual</button>
     <div class="modal-cancelar" onclick="abrirAgendarTarea('${sheet}',${fila},'${nombre.replace(/'/g,"\\'")}')">Volver</div>`;
 }
-function mostrarPasoDeEtapa(sheet, fila, nombre) {
-  const etapa = document.getElementById('ag-etapa').value;
+function mostrarPasoDeEtapa(sheet, fila, nombre, etapaFija) {
+  const etapa = etapaFija || document.getElementById('ag-etapa').value;
+  document.getElementById('modal-box').innerHTML = '<div class="loading">Cargando…</div>';
+  document.getElementById('modal-overlay').classList.add('active');
   apiCall('opcionesDeEtapa', { etapa: etapa }).then(function(opciones) {
     document.getElementById('modal-box').innerHTML = `
-      <div class="modal-title">${etapa}</div>
-      <div class="modal-sub">¿En qué paso concreto está?</div>
+      <div class="modal-title">${nombre} — ${etapa}</div>
+      <div class="modal-sub">Elegí el paso</div>
       ${opciones.map((op, i) => `<button class="opcion-btn" onclick="continuarAgendarEtapa('${sheet}',${fila},'${etapa}',${i})">${op.label}${op.tipoTarea==='verificacion' ? ' (verificación)' : ''}<span class="flecha">›</span></button>`).join('') || '<div class="loading">Esta etapa no tiene pasos configurados.</div>'}
       <button class="opcion-btn manual" onclick="mostrarTareaPersonalizada('${sheet}',${fila},'${etapa}','${nombre.replace(/'/g,"\\'")}')">✎ Tarea personalizada (texto libre)<span class="flecha">›</span></button>
-      <div class="modal-cancelar" onclick="mostrarAgendarEtapa('${sheet}',${fila},'${nombre.replace(/'/g,"\\'")}')">Volver</div>`;
+      <div class="modal-cancelar" onclick="mostrarAgendarEtapa('${sheet}',${fila},'${nombre.replace(/'/g,"\\'")}')">Cambiar etapa</div>
+      <div class="modal-cancelar" onclick="abrirPerfil('${sheet}', ${fila})">Cerrar</div>`;
     window._opcionesEtapaTmp = opciones;
   }).catch(mostrarError);
 }
@@ -2910,16 +2928,14 @@ function abrirSinTarea() {
     ${lista.map(c => `<div class="cliente-row">
       <div style="flex:1"><div class="cliente-nombre">${esc(c.nombre)}</div><div class="cliente-tarea">${esc(c.etapa)}</div></div>
       <div style="display:flex;gap:6px">
-        <button class="btn-chico" style="background:var(--verde);color:#062b23" onclick="cerrarModal();abrirPerfil('${c.sheet}',${c.fila})">Agendar</button>
+        <button class="btn-chico" style="background:var(--verde);color:#062b23" onclick="abrirAgendarTarea('${c.sheet}',${c.fila},'${(c.nombre||'').replace(/'/g,"\\'")}','${(c.etapa||'').replace(/'/g,"\\'")}')">Agendar</button>
         <button class="btn-chico" style="background:var(--card-2);color:var(--text)" onclick="pasarAPotencialClick('${c.sheet}',${c.fila})">A Potencial</button>
       </div></div>`).join('')}
     <div class="modal-cancelar" onclick="cerrarModal()">Cerrar</div>`;
   document.getElementById('modal-overlay').classList.add('active');
 }
 function pasarAPotencialClick(sheet, fila) {
-  if (!confirm('¿Pasar este contacto a Potencial (sin etapa)?')) return;
-  // El modal NO se cierra: se saca el contacto de la lista y se repinta, para poder
-  // procesar varios seguidos sin tener que volver a abrirlo cada vez.
+  // Sin confirm(): es reversible (vuelve a aparecer con solo agendarle algo), no hace falta repreguntar.
   window._sinTareaLista = (window._sinTareaLista || []).filter(c => !(c.sheet === sheet && c.fila === fila));
   abrirSinTarea();
   const b = document.getElementById('banner-sin-tarea');
