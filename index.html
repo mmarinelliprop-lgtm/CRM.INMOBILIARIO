@@ -3,7 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>CRM Solumitos</title>
+<title>CRM</title>
+<!-- Ícono para la barra de marcadores y para "agregar a inicio" en el celular.
+     Va embebido (SVG en data URI): no depende de ningún archivo extra ni de internet. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%233aa0e8'/%3E%3Cstop offset='1' stop-color='%23e0447e'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='14' fill='url(%23g)'/%3E%3Cpath d='M14 44V26l18-10 18 10v18' fill='none' stroke='%23fff' stroke-width='4.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M26 44V34h12v10' fill='none' stroke='%23fff' stroke-width='4.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%233aa0e8'/%3E%3Cstop offset='1' stop-color='%23e0447e'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='14' fill='url(%23g)'/%3E%3Cpath d='M14 44V26l18-10 18 10v18' fill='none' stroke='%23fff' stroke-width='4.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M26 44V34h12v10' fill='none' stroke='%23fff' stroke-width='4.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<meta name="apple-mobile-web-app-title" content="CRM">
+<meta name="theme-color" content="#14161f">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet">
 <style>
@@ -87,6 +93,16 @@
   .ev-sug { padding:9px 10px; font-size:12.5px; background:var(--card-2); border-radius:8px; margin-top:6px; cursor:pointer; }
   .ev-acciones { display:flex; align-items:center; justify-content:flex-end; gap:14px; margin-top:18px; }
   .opcion-btn.elegido { background:var(--verde); color:#062b23; border-color:var(--verde); }
+
+  /* FORMULARIO ÚNICO DE ALTA (cliente + propiedad + tarea) */
+  .alta-sec { border-top:1px solid var(--line); padding-top:14px; margin-top:16px; }
+  .alta-sec:first-of-type { border-top:none; padding-top:0; margin-top:0; }
+  .alta-sec-title { font-size:10.5px; font-weight:800; letter-spacing:.6px; text-transform:uppercase; color:var(--muted); margin-bottom:10px; }
+  .fila-2 { display:flex; gap:10px; }
+  .fila-2 > div { flex:1; min-width:0; }
+  .pills-label { font-size:11px; color:var(--muted); font-weight:700; margin:12px 0 6px; }
+  .alta-hint { font-size:10.5px; color:var(--muted); margin-top:6px; line-height:1.4; }
+  .alta-auto { display:inline-block; font-size:9.5px; font-weight:800; color:var(--verde); background:#2fd6b81f; border:1px solid #2fd6b855; border-radius:6px; padding:2px 6px; margin-left:6px; vertical-align:middle; }
 
   /* TOAST (aviso no bloqueante, reemplaza a los alert) */
   #toast { position:fixed; left:50%; bottom:88px; transform:translateX(-50%) translateY(20px); background:var(--card-2); color:var(--text); border:1px solid var(--line); border-radius:14px; padding:11px 16px; font-size:12.5px; font-weight:700; z-index:120; opacity:0; pointer-events:none; transition:opacity .2s, transform .2s; max-width:86vw; text-align:center; box-shadow:0 8px 24px rgba(0,0,0,.45); }
@@ -2911,51 +2927,6 @@ function guardarEditarCaptacion(fila) {
   _repintarTarjeta(fila);
   mostrarToast('✓ Cambios guardados');
 }
-// ---- Alta manual de propiedad (formulario) ----
-function abrirNuevaPropiedad() {
-  const tipos = ['', 'Departamento', 'PH', 'Casa', 'Terreno', 'Local', 'Galpón', 'Cochera'];
-  document.getElementById('modal-box').innerHTML = `
-    <div class="modal-title">Nueva propiedad</div>
-    <label class="q">Dirección *</label><input class="q" id="np-dir" placeholder="Ej: Montevideo 1738">
-    <label class="q">Tipo</label><select class="q" id="np-tipo">${tipos.map(t => `<option>${t}</option>`).join('')}</select>
-    <label class="q">Localidad / Barrio</label><input class="q" id="np-lugar">
-    <label class="q">Propietario</label><input class="q" id="np-prop">
-    <label class="q">Teléfono</label><input class="q" id="np-tel" inputmode="tel">
-    <label class="q">Valor estimado</label><input class="q" id="np-valor" placeholder="Ej: 85000">
-    <label class="q">Dormitorios</label><input class="q" id="np-dorm" inputmode="numeric">
-    <label class="q">Agente</label><select class="q" id="np-agente"><option value="">-</option><option>Martu</option><option>Jose</option></select>
-    <label class="q">Fecha de inicio</label><input type="date" id="np-fecha">
-    <label class="q">Observación</label><textarea class="q" id="np-obs" rows="2"></textarea>
-    <button class="btn-continuar" onclick="guardarNuevaPropiedad()">Guardar propiedad</button>
-    <div class="modal-cancelar" onclick="cerrarModal()">Cancelar</div>`;
-  document.getElementById('modal-overlay').classList.add('active');
-}
-function guardarNuevaPropiedad() {
-  const dir = document.getElementById('np-dir').value.trim();
-  if (!dir) { mostrarToast('Falta la dirección.'); return; }
-  if (_bloqueadoAhora()) return;
-  const f = document.getElementById('np-fecha').value;
-  const datos = {
-    'DIRECCION': dir,
-    'TIPO DE PROP': document.getElementById('np-tipo').value,
-    'LOCALIDAD': document.getElementById('np-lugar').value.trim(),
-    'PROPIETARIO': document.getElementById('np-prop').value.trim(),
-    'TELEFONO': document.getElementById('np-tel').value.trim(),
-    'VALOR ESTIMADO': document.getElementById('np-valor').value.trim(),
-    'DORMITORIOS': document.getElementById('np-dorm').value.trim(),
-    'AGENTE': document.getElementById('np-agente').value,
-    'FECHA DE INICIO': f ? fechaDDMMAAAA(f) : fechaDDMMAAAA(new Date()),
-    'OBSERVACION': document.getElementById('np-obs').value.trim()
-  };
-  apiCall('agregarCaptacion', { datos: datos })
-    .then(function() {
-      cerrarModal();
-      mostrarToast('✓ Propiedad cargada');
-      cacheVistas.captacionesCrudo = null;
-      pintarCaptaciones();
-    })
-    .catch(mostrarError).finally(_desbloquear);
-}
 function abrirFechaPublicacion(fila) {
   const hoy = new Date().toISOString().slice(0, 10);
   document.getElementById('modal-box').innerHTML = `
@@ -2990,6 +2961,170 @@ function vincularCaptacionesClick() {
   apiCall('vincularCaptacionesAClientes')
     .then(function(r) { mostrarToast(`✓ ${r.vinculados} propiedades vinculadas (${r.creados} clientes nuevos)`); })
     .catch(mostrarError).finally(_desbloquear);
+}
+// ---- Alta completa: cliente + propiedad + primera tarea, todo en un solo formulario ----
+// Reemplaza a la cadena de cuadros encadenados (era lenta y se perdía el hilo).
+const TAREAS_POR_PASO = {
+  prelisting:    ['Coordinar prelisting', 'Primera visita'],
+  acm:           ['Armar el ACM', 'Presentar ACM'],
+  documentacion: ['Pedir documentación al propietario'],
+  fotos:         ['Día de fotos', 'Pasar fotos a editar'],
+  publicada:     ['Publicar en portales', 'Preparar reporte de visitas y consultas']
+};
+function abrirNuevaPropiedad(nombrePre, telPre) {
+  window._altaPasos = ['prelisting'];
+  window._altaFilaPropiedad = null;
+  const tipos = ['Departamento', 'PH', 'Casa', 'Terreno', 'Local', 'Galpón', 'Cochera'];
+  const manana = new Date(); manana.setDate(manana.getDate() + 1); manana.setHours(10, 0, 0, 0);
+  document.getElementById('modal-box').innerHTML = `
+    <div class="modal-title">Nueva captación</div>
+    <div class="modal-sub">Cliente, propiedad y primera tarea — todo junto.</div>
+
+    <div class="alta-sec"><div class="alta-sec-title">Cliente</div>
+      <div class="fila-2">
+        <div><label class="q">Nombre y apellido</label><input class="q" id="al-nombre" value="${esc(nombrePre || '')}" oninput="_altaChequeoDup()"></div>
+        <div><label class="q">Teléfono</label><input class="q" id="al-tel" inputmode="tel" value="${esc(telPre || '')}" oninput="_altaChequeoDup()"></div>
+      </div>
+      <div id="al-dup"></div>
+    </div>
+
+    <div class="alta-sec"><div class="alta-sec-title">Propiedad</div>
+      <label class="q">Dirección</label><input class="q" id="al-dir" oninput="_altaSyncUbicacion()">
+      <div class="fila-2">
+        <div><label class="q">Tipo</label><select class="q" id="al-tipo">${tipos.map(t => `<option>${t}</option>`).join('')}</select></div>
+        <div><label class="q">Localidad / Barrio</label><input class="q" id="al-localidad"></div>
+      </div>
+      <div class="fila-2">
+        <div><label class="q">Valor estimado</label><input class="q" id="al-valor" inputmode="numeric"></div>
+        <div><label class="q">Dormitorios</label><input class="q" id="al-dorm" inputmode="numeric"></div>
+      </div>
+      <div class="pills-label">Estado del proceso</div>
+      <div class="cap-pills" id="al-pills"></div>
+      <div class="alta-hint">La etapa del pipeline sale de acá: el paso más avanzado que marques.</div>
+      <label class="q">Fecha de inicio <span class="alta-auto">HOY · ${fechaDDMMAAAA(new Date())}</span></label>
+      <input class="q" value="${fechaDDMMAAAA(new Date())}" readonly style="opacity:.65">
+      <label class="q">Observación</label><textarea class="q" id="al-obs" rows="2" placeholder="Ej: el propietario viaja hasta el 20"></textarea>
+    </div>
+
+    <div class="alta-sec"><div class="alta-sec-title">Primera tarea</div>
+      <label class="q">Tarea</label><select class="q" id="al-tarea"></select>
+      <input class="q" id="al-tarea-libre" placeholder="Escribí la tarea" style="display:none;margin-top:8px">
+      <div class="fila-2">
+        <div><label class="q">Día y hora</label><input class="q" type="datetime-local" id="al-fecha" value="${toDatetimeLocal(manana)}"></div>
+        <div><label class="q">Duración</label><select class="q" id="al-dur"><option value="30">30 min</option><option value="60" selected>1 hora</option><option value="90">1 h 30</option><option value="120">2 horas</option></select></div>
+      </div>
+      <div class="fila-2">
+        <div><label class="q">Calendario</label><select class="q" id="al-cat"><option value="captacion" selected>Captación</option><option value="reuniones">Reuniones</option><option value="muestra">Muestra</option><option value="oficina">Oficina</option></select></div>
+        <div><label class="q">Quién</label><select class="q" id="al-persona"><option value="Martu">Martu</option><option value="Jose">José</option></select></div>
+      </div>
+      <label class="q">Ubicación <span class="alta-auto">se completa con la dirección</span></label>
+      <input class="q" id="al-ubicacion" oninput="this.dataset.tocado=1">
+      <label class="q">Nota para el evento</label><textarea class="q" id="al-nota" rows="2" placeholder="Opcional"></textarea>
+    </div>
+
+    <button class="btn-continuar" onclick="guardarAltaCompleta()">Guardar todo</button>
+    <div class="modal-cancelar" onclick="cerrarModal()">Cancelar</div>`;
+  document.getElementById('modal-overlay').classList.add('active');
+  const sel = document.getElementById('al-persona');
+  if (sel && window._usuarioActivo && window._usuarioActivo !== 'Ambos') sel.value = window._usuarioActivo;
+  _altaPintarPills();
+}
+function _altaPintarPills() {
+  document.getElementById('al-pills').innerHTML = CHECKLIST_CAPTACION.map(function(e) {
+    return `<span class="pill ${window._altaPasos.includes(e.key) ? 'on' : ''}" onclick="_altaTogglePaso('${e.key}')">${e.label}</span>`;
+  }).join('');
+  _altaPintarTareas();
+}
+function _altaTogglePaso(key) {
+  const i = window._altaPasos.indexOf(key);
+  if (i === -1) window._altaPasos.push(key); else window._altaPasos.splice(i, 1);
+  _altaPintarPills();
+}
+/** Las tareas ofrecidas salen del paso más avanzado marcado. */
+function _altaPintarTareas() {
+  const orden = CHECKLIST_CAPTACION.map(e => e.key);
+  let ultimo = 'prelisting';
+  orden.forEach(function(k) { if (window._altaPasos.includes(k)) ultimo = k; });
+  const opciones = TAREAS_POR_PASO[ultimo] || [];
+  const sel = document.getElementById('al-tarea');
+  sel.innerHTML = opciones.map((t, i) => `<option value="${i}">${esc(t)}</option>`).join('') + '<option value="libre">✎ Escribir una tarea distinta…</option>';
+  sel.onchange = function() {
+    document.getElementById('al-tarea-libre').style.display = sel.value === 'libre' ? 'block' : 'none';
+  };
+  window._altaTareas = opciones;
+  window._altaPasoActual = ultimo;
+}
+function _altaSyncUbicacion() {
+  const u = document.getElementById('al-ubicacion');
+  if (u && !u.dataset.tocado) u.value = document.getElementById('al-dir').value;
+}
+/** Avisa si ya existe un cliente con ese nombre o teléfono, para no duplicarlo. */
+let _altaDupTimer = null;
+function _altaChequeoDup() {
+  clearTimeout(_altaDupTimer);
+  _altaDupTimer = setTimeout(function() {
+    const nombre = document.getElementById('al-nombre').value.trim();
+    const tel = document.getElementById('al-tel').value.trim();
+    if (nombre.length < 3) { document.getElementById('al-dup').innerHTML = ''; return; }
+    apiCall('chequearAntesDeCrearContacto', { nombre: nombre, telefono: tel }).then(function(chk) {
+      const co = (chk && chk.coincidencias) || [];
+      const cont = document.getElementById('al-dup');
+      if (!cont) return;
+      if (!co.length) { cont.innerHTML = ''; window._altaFilaPropiedad = null; return; }
+      cont.innerHTML = `<div class="alta-hint" style="color:var(--naranja);margin-top:8px">Ya existe alguien con esos datos:</div>`
+        + co.map(function(c) {
+            const props = (c.propiedades || []).map(p => `<div class="ev-sug" onclick="_altaUsarPropiedad(${p.fila},'${(p.direccion||'').replace(/'/g,"\\'")}')">↳ ${esc(p.direccion) || 'Propiedad sin dirección'}${p.etapa ? ' · ' + esc(p.etapa) : ''}</div>`).join('');
+            return `<div class="ev-sug" style="color:var(--muted)"><b style="color:var(--text)">${esc(c.nombre)}</b>${c.telefono ? ' · ' + esc(c.telefono) : ''}${c.mismoTelefono ? ' <span style="color:var(--verde)">(mismo teléfono)</span>' : ''}</div>${props}`;
+          }).join('')
+        + `<div class="alta-hint">Si esta captación es sobre una propiedad que ya está cargada, tocala. Si es una propiedad nueva del mismo cliente, seguí completando: se suma sin duplicar la persona.</div>`;
+    }).catch(() => {});
+  }, 500);
+}
+function _altaUsarPropiedad(fila, direccion) {
+  window._altaFilaPropiedad = fila;
+  document.getElementById('al-dir').value = direccion;
+  _altaSyncUbicacion();
+  document.getElementById('al-dup').innerHTML = `<div class="alta-hint" style="color:var(--verde);margin-top:8px">✓ Se va a actualizar la propiedad existente, no se crea una nueva.</div>`;
+}
+function guardarAltaCompleta() {
+  const nombre = document.getElementById('al-nombre').value.trim();
+  const dir = document.getElementById('al-dir').value.trim();
+  if (!nombre) { mostrarToast('Falta el nombre del cliente.'); return; }
+  if (!dir) { mostrarToast('Falta la dirección.'); return; }
+  if (_bloqueadoAhora()) return;
+  const selTarea = document.getElementById('al-tarea');
+  const esLibre = selTarea.value === 'libre';
+  const tarea = esLibre ? document.getElementById('al-tarea-libre').value.trim() : (window._altaTareas[Number(selTarea.value)] || '');
+  if (!tarea) { _desbloquear(); mostrarToast('Falta la tarea.'); return; }
+  const datos = {
+    nombre: nombre,
+    telefono: document.getElementById('al-tel').value.trim(),
+    direccion: dir,
+    tipo: document.getElementById('al-tipo').value,
+    localidad: document.getElementById('al-localidad').value.trim(),
+    valor: document.getElementById('al-valor').value.trim(),
+    dormitorios: document.getElementById('al-dorm').value.trim(),
+    observacion: document.getElementById('al-obs').value.trim(),
+    pasos: window._altaPasos,
+    asesor: document.getElementById('al-persona').value,
+    filaPropiedad: window._altaFilaPropiedad || '',
+    tarea: tarea,
+    tipoTarea: esLibre ? 'especial' : 'paso',
+    pasoIndex: esLibre ? 0 : Number(selTarea.value),
+    fecha: new Date(document.getElementById('al-fecha').value).toISOString(),
+    duracion: document.getElementById('al-dur').value,
+    persona: document.getElementById('al-persona').value,
+    ubicacion: document.getElementById('al-ubicacion').value.trim(),
+    nota: document.getElementById('al-nota').value.trim()
+  };
+  mostrarToast('Guardando…');
+  apiCall('altaCompletaCaptacion', { datos: datos }).then(function(r) {
+    cerrarModal();
+    mostrarToast('✓ ' + r.nombre + ' — captación y tarea creadas');
+    cacheVistas.captacionesCrudo = null; cacheVistas.activosCrudo = null; cacheVistas.potencialesCrudo = null;
+    refrescarSnapshot().then(pintarVistaActual).catch(() => {});
+    if (document.querySelector('.view.active') && document.querySelector('.view.active').id === 'view-captaciones') pintarCaptaciones();
+  }).catch(mostrarError).finally(_desbloquear);
 }
 function toggleMesFiltro(m) {
   const idx = _mesesFiltroActivos.indexOf(m);
