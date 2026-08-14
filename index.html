@@ -2103,7 +2103,10 @@ const PIPELINE_GRUPOS = [
 ];
 function _filaClienteHtml(c, tagTitulo, tagColor) {
   const tag = tagTitulo ? `<span class="cliente-tag" style="background:${tagColor}22;color:${tagColor};border:1px solid ${tagColor}55">${esc(tagTitulo)}</span>` : '';
-  return `<div class="cliente-row" onclick="abrirPerfil('${c.sheet}', ${c.fila})">
+  // Captaciones: al tocar se abre directo el formulario único (cliente + propiedad + tarea),
+  // sin pasar por el perfil. El resto sigue abriendo el perfil normal.
+  const accion = c.sheet === 'CAPTACIONES' ? `_altaAbrirExistente(${c.fila})` : `abrirPerfil('${c.sheet}', ${c.fila})`;
+  return `<div class="cliente-row" onclick="${accion}">
     <div style="flex:1"><div class="cliente-nombre">${tag}${esc(c.nombre)}${c.propiedad ? ' <span style="color:var(--muted);font-weight:500;font-size:10.5px">· ' + esc(c.propiedad) + '</span>' : ''}${c.asesor ? ' <span style="color:var(--muted);font-weight:500;font-size:10.5px">· ' + c.asesor + '</span>' : ''}</div><div class="cliente-tarea">${esc(c.proximaTarea)}${c.proximaFechaISO ? ' · ' + new Date(c.proximaFechaISO).toLocaleDateString('es-AR',{day:'2-digit',month:'2-digit'}) : ''}</div></div>
     <div class="cliente-actions"><button class="icon-btn" onclick="event.stopPropagation();abrirWhatsapp('${c.telefono}')">💬</button></div>
   </div>`;
