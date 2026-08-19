@@ -960,13 +960,25 @@ function _buscarClienteUnico(txt, idInput, idResultados, onElegir, onCrear) {
   const cont = document.getElementById(idResultados);
   const q = (txt || '').trim();
   if (q.length < 2) { cont.innerHTML = ''; return; }
-  cont.innerHTML = '<div class="ev-sug" style="color:var(--muted)">Buscando…</div>';
-  apiCall('buscarClienteUnico', { q: q }).then(function(res) {
+  const pintar = function(res) {
     if ((document.getElementById(idInput).value || '').trim() !== q) return; // siguió escribiendo
     cont.innerHTML = res.length
-      ? res.map(c => `<div class="ev-sug" onclick="_elegirClienteUnico('${(c.nombre||'').replace(/'/g,"\\'")}','${(c.telefono||'')}','${idInput}','${idResultados}','${onElegir}')">${esc(c.nombre)}${c.etapa ? ' · ' + esc(c.etapa) : ''}</div>`).join('')
+      ? res.map(c => `<div class="ev-sug" onclick="_elegirClienteUnico('${(c.nombre||'').replace(/'/g,"\\'")}','${(c.telefono||'')}','${idInput}','${idResultados}','${onElegir}')">${esc(c.nombre)}${c.telefono ? ' · ' + esc(c.telefono) : ''}${c.etapa ? ' · ' + esc(c.etapa) : ''}</div>`).join('')
         + (onCrear ? `<div class="ev-sug" style="color:var(--lila)" onclick="${onCrear}('${q.replace(/'/g,"\\'")}')">+ Crear "${esc(q)}" como contacto nuevo</div>` : '')
       : (onCrear ? `<div class="ev-sug" style="color:var(--lila)" onclick="${onCrear}('${q.replace(/'/g,"\\'")}')">+ No está en la base — crear "${esc(q)}"</div>` : '<div class="ev-sug" style="color:var(--muted)">Sin coincidencias.</div>');
+  };
+  const filtrar = function(lista) {
+    const n = t => ('' + (t||'')).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+    const qq = n(q);
+    return lista.filter(c => n(c.nombre).includes(qq)).slice(0, 8);
+  };
+  // La lista se trae UNA vez y después se filtra en el navegador: antes cada letra
+  // era un pedido al servidor que además esperaba turno en la fila, y tardaba muchísimo.
+  if (cacheVistas.clientesUnicos) { pintar(filtrar(cacheVistas.clientesUnicos)); return; }
+  cont.innerHTML = '<div class="ev-sug" style="color:var(--muted)">Cargando clientes…</div>';
+  apiCall('buscarClienteUnico', { q: '' }).then(function(lista) {
+    cacheVistas.clientesUnicos = lista || [];
+    pintar(filtrar(cacheVistas.clientesUnicos));
   }).catch(function() { cont.innerHTML = '<div class="ev-sug" style="color:var(--muted)">No pude buscar — probá de nuevo.</div>'; });
 }
 /** El nombre de la función a llamar viaja como string en el HTML de arriba; acá se ejecuta de verdad. */
@@ -984,6 +996,10 @@ function _elegirClienteUnico(nombre, telefono, idInput, idResultados, onElegirFn
     }
     const dest = props[0] ? { sheet: 'CAPTACIONES', fila: props[0].fila } : r.consulta;
     cont.innerHTML = '';
+    if (!dest) {
+      // Sin fila a la que apuntar, guardar desvincularía el evento en silencio.
+      cont.innerHTML = '<div class="ev-sug" style="color:var(--naranja)">Ese cliente no tiene ficha ni propiedad para vincular. Se guarda como texto, sin vínculo.</div>';
+    }
     window[onElegirFn](nombre, dest ? dest.sheet : null, dest ? dest.fila : null);
   }).catch(mostrarError);
 }
@@ -999,9 +1015,11 @@ function guardarEdicionEvento(id) {
   if (_bloqueadoAhora()) return;
   const ev = (window._calSnapshot || []).find(e => e.id === id);
   const clienteTextoActual = document.getElementById('edt-cliente').value.trim();
+  // Solo se toca el vínculo si se eligió otro cliente de la lista, o si se borró el nombre.
+  // Antes, escribir en el campo sin elegir nada desvinculaba el evento en silencio.
   const clienteCambio = window._edtCliente
     ? (!ev || ev.sheet !== window._edtCliente.sheet || Number(ev.fila) !== Number(window._edtCliente.fila))
-    : (clienteTextoActual !== (ev ? (ev.cliente || '') : ''));
+    : (!clienteTextoActual && ev && (ev.sheet || ev.cliente));
   const datos = {
     titulo: document.getElementById('edt-titulo').value.trim(),
     fecha: new Date(document.getElementById('edt-fecha').value).toISOString(),
@@ -1346,7 +1364,7 @@ function _crearSoloContacto() {
 }
 /** Vuelve al cuadro del evento (nuevo o edición) con el cliente ya elegido. */
 function _volverAlCuadroDeEvento(r) {
-  cacheVistas.activosCrudo = null; cacheVistas.potencialesCrudo = null; cacheVistas.captacionesCrudo = null;
+  cacheVistas.activosCrudo = null; cacheVistas.potencialesCrudo = null; cacheVistas.captacionesCrudo = null; cacheVistas.clientesUnicos = null;
   if (window._crearContactoOrigen === 'edicion' && window._edtEventoId) {
     const id = window._edtEventoId;
     abrirEvento(id);
@@ -1605,7 +1623,7 @@ function confirmarCerrarCliente(sheet, fila) {
     obs: document.getElementById('cc-obs').value.trim()
   };
   apiCall('cerrarClienteFinal', { sheet: sheet, fila: fila, etapa: etapaFinal, fecha: datos.fecha, monto: datos.monto, obs: datos.obs })
-    .then(function() { cerrarModal(); mostrarToast('✓ Cerrado'); cacheVistas.activosCrudo = null; cacheVistas.captacionesCrudo = null; })
+    .then(function() { cerrarModal(); mostrarToast('✓ Cerrado'); cacheVistas.activosCrudo = null; cacheVistas.captacionesCrudo = null; cacheVistas.clientesUnicos = null; })
     .catch(mostrarError).finally(_desbloquear);
 }
 // ---- Cadena de preguntas del workflow de captación (Prelisting → ACM → Fotos → Publicada) ----
@@ -2103,11 +2121,13 @@ const PIPELINE_GRUPOS = [
 ];
 function _filaClienteHtml(c, tagTitulo, tagColor) {
   const tag = tagTitulo ? `<span class="cliente-tag" style="background:${tagColor}22;color:${tagColor};border:1px solid ${tagColor}55">${esc(tagTitulo)}</span>` : '';
+  // La propiedad existe pero no sabemos de quién es: se muestra igual, marcada.
+  const avisoSinCliente = c.sinCliente ? `<span class="cliente-tag" style="background:#ffa53e22;color:var(--naranja);border:1px solid #ffa53e55">⚠ SIN CLIENTE</span>` : '';
   // Captaciones: al tocar se abre directo el formulario único (cliente + propiedad + tarea),
   // sin pasar por el perfil. El resto sigue abriendo el perfil normal.
   const accion = c.sheet === 'CAPTACIONES' ? `_altaAbrirExistente(${c.fila})` : `abrirPerfil('${c.sheet}', ${c.fila})`;
   return `<div class="cliente-row" onclick="${accion}">
-    <div style="flex:1"><div class="cliente-nombre">${tag}${esc(c.nombre)}${c.propiedad ? ' <span style="color:var(--muted);font-weight:500;font-size:10.5px">· ' + esc(c.propiedad) + '</span>' : ''}${c.asesor ? ' <span style="color:var(--muted);font-weight:500;font-size:10.5px">· ' + c.asesor + '</span>' : ''}</div><div class="cliente-tarea">${esc(c.proximaTarea)}${c.proximaFechaISO ? ' · ' + new Date(c.proximaFechaISO).toLocaleDateString('es-AR',{day:'2-digit',month:'2-digit'}) : ''}</div></div>
+    <div style="flex:1"><div class="cliente-nombre">${tag}${avisoSinCliente}${esc(c.nombre)}${c.propiedad ? ' <span style="color:var(--muted);font-weight:500;font-size:10.5px">· ' + esc(c.propiedad) + '</span>' : ''}${c.asesor ? ' <span style="color:var(--muted);font-weight:500;font-size:10.5px">· ' + c.asesor + '</span>' : ''}</div><div class="cliente-tarea">${esc(c.proximaTarea)}${c.proximaFechaISO ? ' · ' + new Date(c.proximaFechaISO).toLocaleDateString('es-AR',{day:'2-digit',month:'2-digit'}) : ''}</div></div>
     <div class="cliente-actions"><button class="icon-btn" onclick="event.stopPropagation();abrirWhatsapp('${c.telefono}')">💬</button></div>
   </div>`;
 }
@@ -2817,6 +2837,7 @@ function captacionCardHtml(i) {
         <div class="cap-progreso-pct">${pct}%</div>
       </div>
     </div>
+    ${!i.clienteId ? `<div class="cap-extra" style="color:var(--naranja)">⚠ Sin cliente asignado — tocá el lápiz para cargarlo</div>` : ''}
     ${i.clienteId ? `<div class="cap-extra" style="color:var(--lila)">Cliente: ${esc(i.propietarioNombre) || '(sin nombre)'} · <span style="color:var(--muted)">para cambiarlo, editá el propietario con el lápiz</span></div>` : ''}
     <div class="cap-extra-title" onclick="toggleExtraCap(${i.fila})">Ver más datos ▾</div>
     <div id="extra-${i.fila}" style="display:${extraAbierto ? 'block' : 'none'}">
@@ -3006,14 +3027,30 @@ function _altaChequeoDup() {
       const cont = document.getElementById('al-dup');
       if (!cont) return;
       if (!co.length) { cont.innerHTML = ''; return; }
+      const hayDuplicados = co.length > 1;
       cont.innerHTML = `<div class="alta-hint" style="color:var(--naranja);margin-top:8px">Ya existe alguien con esos datos:</div>`
         + co.map(function(c) {
-            const props = (c.propiedades || []).filter(p => p.direccion).map(p => `<div class="ev-sug" onclick="_altaUsarPropiedad(${p.fila},'${(p.direccion||'').replace(/'/g,"\\'")}')">↳ ${esc(p.direccion)}${p.etapa ? ' · ' + esc(p.etapa) : ''}</div>`).join('');
-            return `<div class="ev-sug" style="color:var(--muted)"><b style="color:var(--text)">${esc(c.nombre)}</b>${c.telefono ? ' · ' + esc(c.telefono) : ''}${c.mismoTelefono ? ' <span style="color:var(--verde)">(mismo teléfono)</span>' : ''}</div>${props}`;
+            // Cada ficha muestra algo que la distinga: sin esto aparecían dos filas idénticas.
+            const detalle = [c.telefono ? '📞 ' + esc(c.telefono) : 'sin teléfono',
+                             c.etapa ? esc(c.etapa) : 'sin etapa',
+                             (c.propiedades || []).length + ' prop.'].join(' · ');
+            const props = (c.propiedades || []).map(p => `<div class="ev-sug" onclick="_altaUsarPropiedad(${p.fila},'${(p.direccion||'').replace(/'/g,"\\'")}')">↳ ${esc(p.direccion) || '<i style="color:var(--muted)">propiedad sin dirección</i>'}${p.etapa ? ' · ' + esc(p.etapa) : ''}</div>`).join('');
+            return `<div class="ev-sug" style="color:var(--muted)"><b style="color:var(--text)">${esc(c.nombre)}</b><br><span style="font-size:10.5px">${detalle}</span></div>${props}`;
           }).join('')
+        + (hayDuplicados ? `<button class="btn-chico" style="background:var(--lila);color:#fff;width:100%;margin-top:8px;padding:9px" onclick="_altaUnificar('${(co[0].nombre||'').replace(/'/g,"\\'")}')">⚯ Unificar estas ${co.length} fichas en una sola</button>` : '')
         + `<div class="alta-hint">Si es sobre una propiedad ya cargada, tocala. Si es una propiedad nueva del mismo cliente, seguí: se suma sin duplicar la persona.</div>`;
     }).catch(() => {});
   }, 500);
+}
+function _altaUnificar(nombre) {
+  if (!confirm('¿Unificar todas las fichas de "' + nombre + '" en una sola?\n\nSe conserva la más antigua y se le completan los datos que le falten con los de las otras. Las propiedades quedan asociadas a la ficha que queda.')) return;
+  if (_bloqueadoAhora()) return;
+  apiCall('unificarClientesDuplicados', { nombre: nombre }).then(function(r) {
+    if (r.mensaje) { mostrarToast(r.mensaje); return; }
+    mostrarToast('✓ ' + r.unificadas + ' ficha' + (r.unificadas > 1 ? 's' : '') + ' unificada' + (r.unificadas > 1 ? 's' : ''));
+    cacheVistas.activosCrudo = null; cacheVistas.captacionesCrudo = null; cacheVistas.potencialesCrudo = null; cacheVistas.clientesUnicos = null;
+    _altaChequeoDup(); // vuelve a mirar: ahora debería quedar una sola
+  }).catch(mostrarError).finally(_desbloquear);
 }
 function _altaUsarPropiedad(fila, direccion) {
   window._altaFilaPropiedad = fila;
@@ -3061,7 +3098,7 @@ function guardarAltaCompleta() {
     if (r.duplicado) { _altaMostrarDuplicado(r.duplicado); return; }
     cerrarModal();
     mostrarToast('✓ ' + r.nombre + ' — guardado');
-    cacheVistas.captacionesCrudo = null; cacheVistas.activosCrudo = null; cacheVistas.potencialesCrudo = null;
+    cacheVistas.captacionesCrudo = null; cacheVistas.activosCrudo = null; cacheVistas.potencialesCrudo = null; cacheVistas.clientesUnicos = null;
     refrescarSnapshot().then(pintarVistaActual).catch(() => {});
     const va = document.querySelector('.view.active');
     if (va && va.id === 'view-captaciones') pintarCaptaciones();
@@ -3098,7 +3135,7 @@ function eliminarCaptacionClick(fila) {
   apiCall('eliminarCaptacion', { fila: fila }).then(function() {
     cerrarModal();
     mostrarToast('✓ Propiedad eliminada');
-    cacheVistas.captacionesCrudo = null; cacheVistas.activosCrudo = null;
+    cacheVistas.captacionesCrudo = null; cacheVistas.activosCrudo = null; cacheVistas.clientesUnicos = null;
     pintarCaptaciones();
   }).catch(mostrarError).finally(_desbloquear);
 }
@@ -3222,7 +3259,7 @@ function pasarAPotencialClick(sheet, fila) {
   if (!n) { b.style.display = 'none'; cerrarModal(); }
   else b.querySelector('.txt').innerText = `${n} contacto${n>1?'s':''} activo${n>1?'s':''} sin tarea agendada.`;
   apiCall('cambiarEtapaCliente', { sheet: sheet, fila: fila, etapa: '' })
-    .then(() => { cacheVistas.activosCrudo = null; cacheVistas.potencialesCrudo = null; })
+    .then(() => { cacheVistas.activosCrudo = null; cacheVistas.potencialesCrudo = null; cacheVistas.clientesUnicos = null; })
     .catch(mostrarError);
 }
 
